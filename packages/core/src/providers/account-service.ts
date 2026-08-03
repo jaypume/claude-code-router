@@ -17,9 +17,9 @@ import {
 } from "@ccr/core/agents/local-providers/service";
 import { grokAccessTokenExpired } from "@ccr/core/agents/local-providers/grok";
 import {
-  openCodeGoAuthCookiePlaceholder,
-  openCodeGoWorkspacePlaceholder
-} from "@ccr/core/agents/local-providers/opencode";
+  OPEN_CODE_GO_AUTH_COOKIE_PLACEHOLDER as openCodeGoAuthCookiePlaceholder,
+  OPEN_CODE_GO_WORKSPACE_PLACEHOLDER as openCodeGoWorkspacePlaceholder
+} from "@ccr/core/contracts/app";
 import { pluginService } from "@ccr/core/plugins/service";
 import { getUsageTotalsSince } from "@ccr/core/usage/store";
 import { findProviderPresetByBaseUrl, providerEndpointCanReceiveProviderApiKey } from "@ccr/core/providers/presets/index";
@@ -185,11 +185,12 @@ export async function testProviderAccountConnector(request: ProviderAccountTestR
     type: "http-json"
   };
   if (connector.parser === "opencode-go-usage") {
-    const payload = await fetchOpenCodeGoUsageText(connector.endpoint, provider, connector.headers, connector.method, connector.body);
+    const payload = await fetchOpenCodeGoUsageText(connector.endpoint, connector.headers, connector.method, connector.body);
     const meters = opencodeGoUsageMeters(payload);
     return {
       meters,
       message: meters.length === 0 ? "No OpenCode Go usage data available." : undefined,
+      paths: flattenJsonPaths(payload),
       payload,
       status: meters.length > 0 ? statusFromMeters(meters, [], 1) : "error"
     };
@@ -690,7 +691,7 @@ async function resolveHttpJsonConnector(
     ? await materializeProviderAccountRequest(config, provider)
     : { provider };
   if (connector.parser === "opencode-go-usage") {
-    const payload = await fetchOpenCodeGoUsageText(connector.endpoint, request.provider, connector.headers, connector.method, connector.body);
+    const payload = await fetchOpenCodeGoUsageText(connector.endpoint, connector.headers, connector.method, connector.body);
     const meters = opencodeGoUsageMeters(payload);
     return {
       errors: [],
@@ -1099,6 +1100,145 @@ function newApiUserSelfData(payload: unknown): Record<string, unknown> | undefin
   const data = readJsonRecordValue(payload, "data");
   return isRecord(data) ? data : payload;
 }
+
+export function opencodeGoUsageMetersForTest(text: string): ProviderAccountMeter[] {
+  return opencodeGoUsageMeters(text);
+}
+
+async function fetchOpenCodeGoUsageText(
+  endpoint: string,
+  headers: Record<string, string> | undefined,
+  method: "GET" | "POST" = "GET",
+  body?: unknown
+): Promise<string> {
+  const requestHeaders: Record<string, string> = { ...(headers ?? {}) };
+  if (method === "POST") {
+    requestHeaders["content-type"] = requestHeaders["content-type"] ?? "application/json";
+  }
+  const response = await fetchWithSystemProxy(endpoint, {
+    body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
+    headers: requestHeaders,
+    method
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    const errorMessage = jsonErrorMessage(text) || readableResponseSnippet(text) || response.statusText;
+    throw new Error(`OpenCode Go endpoint returned HTTP ${response.status}${errorMessage ? `: ${errorMessage}` : ""}.`);
+  }
+  return text;
+}
+
+function opencodeGoUsageMeters(text: string): ProviderAccountMeter[] {
+  if (text.includes(openCodeGoWorkspacePlaceholder) || text.includes(openCodeGoAuthCookiePlaceholder)) {
+    throw new Error(
+      "OpenCode Go account connector needs a configured workspaceId and auth cookie. " +
+      `Edit the provider account connectors and replace ${openCodeGoWorkspacePlaceholder} and ${openCodeGoAuthCookiePlaceholder}.`
+    );
+  }
+  const meters = opencodeGoJsonMeters(opencodeGoJsonPayload(text)) ?? opencodeGoHtmlMeters(text);
+  if (meters.length === 0) {
+    throw new Error("Could not find OpenCode Go quota usage data in the endpoint response.");
+  }
+  return meters;
+}
+
+function opencodeGoJsonPayload(text: string): Record<string, unknown> | undefined {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function opencodeGoJsonMeters(payload: Record<string, unknown> | undefined): ProviderAccountMeter[] | undefined {
+  if (!payload) {
+    return undefined;
+  }
+  const now = Date.now();
+  const meters: ProviderAccountMeter[] = [];
+  for (const spec of openCodeGoWindowSpecs) {
+    const record = readJsonRecordValue(payload, spec.jsonKey);
+    if (!isRecord(record)) {
+      continue;
+    }
+    const usagePercent = normalizeNumber(readJsonRecordValue(record, "usagePercent"));
+    if (usagePercent === undefined) {
+      continue;
+    }
+    const resetInSec = normalizeNumber(readJsonRecordValue(record, "resetInSec")) ??
+      normalizeNumber(readJsonRecordValue(record, "resets_in_seconds"));
+    meters.push(opencodeGoMeter(spec, {
+      resetInSec: resetInSec ?? 0,
+      status: readString(readJsonRecordValue(record, "status")) ?? "ok",
+      usagePercent
+    }, now));
+  }
+  return meters.length > 0 ? meters : undefined;
+}
+
+function opencodeGoHtmlMeters(text: string): ProviderAccountMeter[] {
+  const now = Date.now();
+  const meters: ProviderAccountMeter[] = [];
+  for (const spec of openCodeGoWindowSpecs) {
+    const window = opencodeGoHtmlWindow(text, spec.name);
+    if (!window || window.status === "unknown") {
+      continue;
+    }
+    meters.push(opencodeGoMeter(spec, window, now));
+  }
+  return meters;
+}
+
+function opencodeGoHtmlWindow(text: string, name: string): { resetInSec: number; status: string; usagePercent: number } | undefined {
+  // SolidJS SSR hydration data, e.g. rollingUsage:$R[30]={status:"ok",resetInSec:17562,usagePercent:1}
+  // 数字放宽为浮点（usagePercent 可能带小数），避免整数值变化导致窗口解析失败
+  let pattern = new RegExp(`${name}:\\$R\\[\\d+\\]=\\{status:"([^"]+)",resetInSec:([\\d.]+),usagePercent:([\\d.]+)\\}`);
+  let match = pattern.exec(text);
+  if (!match) {
+    pattern = new RegExp(`${name}=\\{status:"([^"]+)",resetInSec:([\\d.]+),usagePercent:([\\d.]+)\\}`);
+    match = pattern.exec(text);
+  }
+  if (!match) {
+    return undefined;
+  }
+  return {
+    resetInSec: parseFloat(match[2]),
+    status: match[1],
+    usagePercent: parseFloat(match[3])
+  };
+}
+
+function opencodeGoMeter(
+  spec: (typeof openCodeGoWindowSpecs)[number],
+  window: { resetInSec: number; status: string; usagePercent: number },
+  now: number
+): ProviderAccountMeter {
+  const limit = spec.limit;
+  const used = (limit * window.usagePercent) / 100;
+  return {
+    id: spec.id,
+    kind: "quota",
+    label: spec.label,
+    limit,
+    remaining: Math.max(0, limit - used),
+    resetAt: new Date(now + window.resetInSec * 1000).toISOString(),
+    source: "http-json",
+    unit: "USD",
+    used,
+    window: spec.window
+  };
+}
+
+const openCodeGoWindowSpecs = [
+  { id: "opencode_go_rolling", jsonKey: "rolling", label: "Go 5-hour limit", limit: 12, name: "rollingUsage", window: "5h" },
+  { id: "opencode_go_weekly", jsonKey: "weekly", label: "Go weekly limit", limit: 30, name: "weeklyUsage", window: "weekly" },
+  { id: "opencode_go_monthly", jsonKey: "monthly", label: "Go monthly limit", limit: 60, name: "monthlyUsage", window: "monthly" }
+] as const;
 
 function kimiCodeUsageMeters(payload: unknown): ProviderAccountMeter[] {
   if (!isRecord(payload)) {

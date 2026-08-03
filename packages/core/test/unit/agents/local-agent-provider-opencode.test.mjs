@@ -90,7 +90,8 @@ test("OpenCode local provider imports Zen models using each model's native proto
     assert.equal(result.provider.protocol, "openai_responses");
     assert.equal(result.provider.apiKey, localAgentProviderApiKey);
     assert.deepEqual(result.provider.models, ["gpt-current"]);
-    assert.equal(result.provider.account, undefined);
+    assert.equal(result.provider.account?.connectors?.[0]?.parser, "opencode-go-usage");
+    assert.equal(result.provider.account?.connectors?.[0]?.auth, "none");
     assert.equal(result.providerPlugins.length, 2);
     assert.equal(result.providerPlugins[0].auth.headers.authorization, "Bearer opencode-zen-key");
     assert.equal(result.providerPlugins[0].key, "ccr-local-agent-__CCR_PROVIDER_NAME_SLUG__-opencode-openai-responses-api-key");
@@ -246,6 +247,72 @@ test("OpenCode local provider stays hidden without a login or cached public mode
     assert.ok(candidates.every((candidate) => candidate.status === "missing"));
     assert.ok(candidates.every((candidate) => !candidate.importable));
   });
+});
+
+test("OpenCode local provider adds a Go usage connector template on login import", async () => {
+  await withOpenCodeHome(async (home) => {
+    writeOpenCodeAuth(home, {
+      opencode: {
+        key: "opencode-zen-key",
+        type: "api"
+      }
+    });
+    writeOpenCodeModels(home, {
+      api: "https://opencode.ai/zen/v1",
+      models: {
+        "gpt-5.2": { name: "GPT 5.2" }
+      },
+      name: "OpenCode Zen",
+      npm: "@ai-sdk/openai-compatible"
+    });
+
+    const result = importOpenCodeProvider(candidateForProtocol(opencodeCandidates(), "openai_responses"), []);
+    const connector = result.provider.account?.connectors?.[0];
+    assert.equal(connector?.type, "http-json");
+    assert.equal(connector?.parser, "opencode-go-usage");
+    assert.equal(connector?.auth, "none");
+    assert.ok(connector?.endpoint.includes("{workspaceId}"));
+    assert.ok(connector?.endpoint.endsWith("/go"));
+    assert.ok(connector?.headers?.Cookie.includes("{authCookie}"));
+    assert.ok(connector?.headers?.["User-Agent"].includes("Chrome"));
+  });
+});
+
+test("OpenCode removes only generated account connectors and keeps configured Go usage connectors", () => {
+  const provider = removeOpenCodeProviderAccountConfig({
+    account: {
+      connectors: [
+        {
+          message: "Local usage from CCR history. OpenCode does not expose cloud balance through its API.",
+          type: "local-estimate",
+          windows: [
+            { id: "opencode_monthly_spend", label: "CCR monthly spend", unit: "USD", window: "monthly" },
+            { id: "opencode_monthly_tokens", label: "CCR monthly tokens", unit: "tokens", window: "monthly" },
+            { id: "opencode_monthly_requests", label: "CCR monthly requests", unit: "requests", window: "monthly" }
+          ]
+        },
+        {
+          auth: "none",
+          endpoint: "https://opencode.ai/workspace/ws-123/go",
+          headers: {
+            Accept: "text/html",
+            Cookie: "auth=real-cookie-value",
+            "User-Agent": "Mozilla/5.0"
+          },
+          mapping: { meters: [] },
+          parser: "opencode-go-usage",
+          type: "http-json"
+        }
+      ],
+      enabled: true
+    },
+    api_key: localAgentProviderApiKey,
+    models: ["gpt-5.2"],
+    name: "OpenCode Zen (Responses)",
+    protocol: "openai_responses"
+  });
+  assert.equal(provider.account?.connectors?.length, 1);
+  assert.equal(provider.account?.connectors?.[0]?.parser, "opencode-go-usage");
 });
 
 test("OpenCode removes the previously generated local account usage connector", () => {

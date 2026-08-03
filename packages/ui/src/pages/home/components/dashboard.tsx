@@ -7,10 +7,11 @@ import {
   compactUserAgent, compareProviderAccountSnapshots, ComposedChart, CSS, DEFAULT_OVERVIEW_WIDGETS, DndContext,
   Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle,
   DragEndEvent, DragOverEvent, DragOverlay, DragStartEvent, Field, formatAxisNumber, formatBytes,
-  formatCompactNumber, formatDuration, formatLogDateTime, formatPercent, formatProviderAccountDetailDate, formatProviderAccountMeterTitleCompact, formatProviderAccountMeterValue, formatProviderAccountResetDuration,
+  formatCompactNumber, formatDuration, formatLogDateTime, formatPercent, formatProviderAccountDetailDate, formatProviderAccountMeterTitleCompact, formatProviderAccountMeterValue, formatProviderAccountResetDuration, formatOpenCodeGoUsageParts, formatOpenCodeGoUsageValue,
   formatStatusBucketDate, formatSystemStatusRange, formatUsdCost, KeyboardSensor,
-  LabelList, LayoutGroup, Line, LoaderCircle, MeasuringStrategy, MetricTone,
+  isOpenCodeGoUsageMeter, LabelList, LayoutGroup, Line, LoaderCircle, MeasuringStrategy, MetricTone,
   motion, normalizeAgentFilterValue, normalizeOverviewWidget, normalizeOverviewWidgets,
+  openCodeGoUsageMetersForDisplay,
   OverviewMetricKind, overviewMetricOptions, overviewWidgetCollisionDetection, OverviewWidgetConfig, OverviewWidgetSize, overviewWidgetSizeOptions,
   OverviewWidgetType, OverviewWidgetVariant, Pencil, Pie, PieChart, Plus,
   PointerSensor, primaryProviderAccountMeter, providerAccountMeterDetailValidityProgress, providerAccountMeterProgress, providerAccountMetersForDisplay, providerAccountProgressClass, isGatewayProviderEnabled, isProviderAccountManualResetMeter,
@@ -2398,7 +2399,7 @@ function ProviderAccountsOverview({
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-1 text-right">
                     {providerAccountShowRefresh(dimensions) ? <ProviderAccountRefreshButton account={account} refreshing={refreshing} onRefresh={onRefresh} /> : null}
-                    {meter ? <div className="text-[12px] font-semibold">{formatProviderAccountMeterValue(meter)}</div> : null}
+                    {meter ? <div className="font-mono text-[12px] font-semibold tabular-nums">{isOpenCodeGoUsageMeter(meter) ? formatOpenCodeGoUsageValue(meter) : formatProviderAccountMeterValue(meter)}</div> : null}
                   </div>
                 </div>
               );
@@ -2408,7 +2409,7 @@ function ProviderAccountsOverview({
           <div className={cn("h-full min-h-0 overflow-y-auto pr-1", "space-y-1.5")}>
             {visibleAccounts.map((account) => {
               const meter = primaryProviderAccountDisplayMeter(account);
-              const progress = meter && isProviderAccountQuotaMeter(meter) ? providerAccountMeterProgress(meter) : undefined;
+              const progress = meter && !isOpenCodeGoUsageMeter(meter) && isProviderAccountQuotaMeter(meter) ? providerAccountMeterProgress(meter) : undefined;
               return (
                 <div className="min-w-0 overflow-hidden" key={providerAccountSnapshotKey(account)}>
                   <div className="flex min-w-0 items-end justify-between gap-3">
@@ -2417,8 +2418,8 @@ function ProviderAccountsOverview({
                       {providerAccountShowSource(dimensions) && meter ? <div className="truncate text-[11px] text-muted-foreground">{t(meter.label)}</div> : null}
                       {providerAccountShowRefreshTime(dimensions) ? <div className="truncate text-[11px] text-muted-foreground">{formatProviderAccountRefreshTime(account, t)}</div> : null}
                     </div>
-                    <div className="flex shrink-0 items-center gap-2 text-[12px] font-semibold">
-                      {meter ? <span>{formatProviderAccountMeterValue(meter)}</span> : null}
+                    <div className="flex shrink-0 items-center gap-2 font-mono text-[12px] font-semibold tabular-nums">
+                      {meter ? <span>{isOpenCodeGoUsageMeter(meter) ? formatOpenCodeGoUsageValue(meter) : formatProviderAccountMeterValue(meter)}</span> : null}
                       {providerAccountShowRefresh(dimensions) ? <ProviderAccountRefreshButton account={account} refreshing={refreshing} onRefresh={onRefresh} /> : null}
                     </div>
                   </div>
@@ -2485,7 +2486,7 @@ function useRerenderEvery(intervalMs: number) {
   }, [intervalMs]);
 }
 
-function ProviderAccountSinglePanel({
+export function ProviderAccountSinglePanel({
   account,
   dimensions,
   onRefresh,
@@ -2502,7 +2503,11 @@ function ProviderAccountSinglePanel({
   const t = useAppText();
   const quotaMeters = providerAccountQuotaMeters(account);
   const balanceMeter = primaryProviderAccountBalanceMeter(account);
-  const meters = providerAccountMetersForDisplayOrdered(account, providerAccountMeterLimit(dimensions, true, variant));
+  const openCodeGo = account.meters.some(isOpenCodeGoUsageMeter);
+  // OpenCode Go 固定显示三个配额窗口（5H/7D/1M）：缺数据窗口补占位行，不受 widget 高度压缩。
+  const meters = openCodeGo
+    ? openCodeGoUsageMetersForDisplay(account)
+    : providerAccountMetersForDisplayOrdered(account, providerAccountMeterLimit(dimensions, true, variant));
   const showQuotaVisual = providerAccountUsesQuotaVisual(variant) && quotaMeters.length > 0;
 
   return (
@@ -2519,7 +2524,7 @@ function ProviderAccountSinglePanel({
       ) : quotaMeters.length === 0 && balanceMeter ? (
         <ProviderAccountBalanceMetric dimensions={dimensions} meter={balanceMeter} />
       ) : meters.length > 0 ? (
-        <div className={cn("min-h-0 overflow-hidden", "space-y-1")}>
+        <div className={cn("min-h-0", openCodeGo ? "overflow-y-auto" : "overflow-hidden", "space-y-1")}>
           {meters.map((meter) => (
             <ProviderAccountMeterLine account={account} dimensions={dimensions} key={meter.id} meter={meter} single onRefresh={onRefresh} />
           ))}
@@ -2555,7 +2560,11 @@ function ProviderAccountSummaryCard({
   const t = useAppText();
   const quotaMeters = providerAccountQuotaMeters(account);
   const balanceMeter = primaryProviderAccountBalanceMeter(account);
-  const meters = providerAccountMetersForDisplayOrdered(account, providerAccountMeterLimit(dimensions, false, variant));
+  const openCodeGo = account.meters.some(isOpenCodeGoUsageMeter);
+  // OpenCode Go 固定三个配额窗口（5H/7D/1M）：与单账户大面板一致，缺数据窗口补占位行，不受行数限制压缩。
+  const meters = openCodeGo
+    ? openCodeGoUsageMetersForDisplay(account)
+    : providerAccountMetersForDisplayOrdered(account, providerAccountMeterLimit(dimensions, false, variant));
   const showQuotaVisual = providerAccountUsesQuotaVisual(variant) && quotaMeters.length > 0;
   // 凭据池 key 通过右上角按钮切换启用/禁用（避免整卡点击被卡片内交互误触）；禁用后整体变暗
   const toggleable = Boolean(onToggleCredential);
@@ -2676,6 +2685,20 @@ function formatProviderAccountUpdatedAt(value: string): string {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
+// OpenCode Go 用量值：金额与括号浅色（text-muted-foreground），百分比主色；整体 font-mono（与倒计时同字体）保证两位数字严格对齐。
+function OpenCodeGoUsageValue({ meter }: { meter: ProviderAccountMeter }) {
+  const parts = formatOpenCodeGoUsageParts(meter);
+  if (!parts) {
+    return null;
+  }
+  return (
+    <span className="font-mono">
+      <span className="font-medium text-muted-foreground">({parts.usedText})</span>
+      {parts.percentText ? <span className="ml-1.5">{parts.percentText}</span> : null}
+    </span>
+  );
+}
+
 function ProviderAccountMeterLine({
   account,
   dimensions,
@@ -2690,23 +2713,28 @@ function ProviderAccountMeterLine({
   single?: boolean;
 }) {
   const t = useAppText();
-  const progress = isProviderAccountQuotaMeter(meter) ? providerAccountMeterProgress(meter) : undefined;
+  const isOpenCodeGo = isOpenCodeGoUsageMeter(meter);
+  const progress = !isOpenCodeGo && isProviderAccountQuotaMeter(meter) ? providerAccountMeterProgress(meter) : undefined;
   const canExpandDetails = dimensions.height >= 2 && isProviderAccountManualResetMeter(meter) && (meter.details?.length ?? 0) > 0;
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [resetDialogDetail, setResetDialogDetail] = useState<NonNullable<ProviderAccountMeter["details"]>[number]>();
   const labelText = t(meter.label);
   const resetDuration = meter.resetAt ? formatProviderAccountResetDuration(meter.resetAt) : undefined;
   // 已过期（或非法时间）时回退为「expired」文案；正常时用图标 + 纯时长，不重复「剩余」前缀。
-  // 天级窗口（如 7D/30D，时长含 d 单位）用 ☀️，小时级（如 5H）用 🕛。
-  const resetIcon = resetDuration?.includes("d") ? "☀️" : "🕛";
-  const resetText = resetDuration !== undefined ? `${resetIcon} ${resetDuration}` : (meter.resetAt ? t("expired") : "");
+  // 天级窗口（如 7D/30D，时长含 d 单位）用 ☀️，小时级（如 5H）用 🕛；OpenCode Go 的月窗口（1M）用 🈷️。
+  const resetIcon = isOpenCodeGo && meter.window === "monthly" ? "🈷️" : (resetDuration?.includes("d") ? "☀️" : "🕛");
+  // OpenCode Go 行：已过期时不显示任何倒计时/过期文案（保持为空）。
+  // 倒计时文本左补不换行空格到 6 字符（等宽字体下各行右对齐，如 ` 6d01h` / `25d12h`；普通空格会被 HTML 折叠）。
+  const resetText = resetDuration !== undefined
+    ? `${resetIcon} ${resetDuration.padStart(6, "\u00A0")}`
+    : (isOpenCodeGo ? "" : (meter.resetAt ? t("expired") : ""));
   // 百分比告警分级：达到 75 用橙色（text-amber-500），达到 90 及以上用红色（text-red-500）
   const meterNumber = meter.remaining ?? meter.used ?? meter.limit;
   const valueDanger = meter.unit === "%" && typeof meterNumber === "number" && meterNumber >= 90;
   const valueWarning = meter.unit === "%" && typeof meterNumber === "number" && meterNumber >= 75 && !valueDanger;
   const detailsId = `provider-account-meter-${providerAccountSnapshotKey(account)}-${meter.id}-details`.replace(/[^a-zA-Z0-9_-]/g, "-");
   const titleClassName = cn("min-w-0 truncate font-semibold text-muted-foreground", single && dimensions.height >= 2 ? "text-[13px]" : "text-[12px]");
-  const valueClassName = cn("shrink-0 font-semibold tracking-tight tabular-nums", valueDanger && "text-red-500", valueWarning && "text-amber-500", single && dimensions.height >= 2 ? "text-[14px]" : "text-[13px]");
+  const valueClassName = cn("shrink-0 font-mono font-semibold tracking-tight tabular-nums", valueDanger && "text-red-500", valueWarning && "text-amber-500", single && dimensions.height >= 2 ? "text-[14px]" : "text-[13px]");
   const resetClassName = cn("shrink-0 font-mono font-medium text-muted-foreground", single && dimensions.height >= 2 ? "text-[12px]" : "text-[11px]");
   const meterSummary = (
     <>
@@ -2719,7 +2747,7 @@ function ProviderAccountMeterLine({
         <div className={titleClassName}>{labelText}</div>
         {resetText ? <div className={resetClassName}>{resetText}</div> : null}
       </div>
-      <div className={valueClassName}>{formatProviderAccountMeterValue(meter, t)}</div>
+      <div className={valueClassName}>{isOpenCodeGo ? <OpenCodeGoUsageValue meter={meter} /> : formatProviderAccountMeterValue(meter, t)}</div>
     </>
   );
 

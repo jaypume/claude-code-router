@@ -9,9 +9,9 @@ import {
   Layers3, LoaderCircle, localAgentProviderIconUrls, mergeProviderModelLists, modelCatalogItemMatchesQuery, motion,
   Pencil, Plus, PopoverContent, primaryProviderAccountMeter, primaryProviderPresetEndpoint,
   providerAccountConnectorApiKeySafetyIssue, providerAccountConnectorExample, ProviderAccountDraftMode, providerAccountModeOptions, ProviderAccountSnapshot,
-  providerAccountConnectorsTextWithNewApiUserBalanceTemplate, providerAccountSnapshotCredentialLabel, providerAccountSnapshotLabel, ProviderAccountTestPath,
+  providerAccountConnectorsTextWithNewApiUserBalanceTemplate, opencodeGoUsageConnectorFromText, opencodeGoUsageCredentialValues, providerAccountSnapshotCredentialLabel, providerAccountSnapshotLabel, ProviderAccountTestPath,
   ProviderAccountTestResult, providerBaseUrl, providerCapabilitiesSummary, ProviderCredentialDraft, ProviderDeepLinkPayload, ProviderDeepLinkRequest, providerDraftSafetyIssue, providerCredentialDraftPatchFromJson, providerHttpJsonConnectorFromDraft,
-  ProviderConnectivityCheckReport, providerCapabilityBaseUrlForProtocol, providerConnectivityApiKeyFromDraft, providerDeepLinkDisplayIcon, providerDraftHasReadyCredentialPool, providerListItemKey, providerMatchesQuery, ProviderPreset, providerPresetIconUrls, providerProbeHasSupportedProtocol,
+  providerAccountConnectorsTextWithOpenCodeGoCredentials, ProviderConnectivityCheckReport, providerCapabilityBaseUrlForProtocol, providerConnectivityApiKeyFromDraft, providerDeepLinkDisplayIcon, providerDraftHasReadyCredentialPool, providerListItemKey, providerMatchesQuery, ProviderPreset, providerPresetIconUrls, providerProbeHasSupportedProtocol,
   providerDisplayIcon, providerGlobalBaseUrlForProbe, providerModelDisplayName, providerModelDisplayTitle, providerProtocolOptions, providerSelectableProtocolsFromProbe, providerUsageFieldPatch, ProviderUsageFieldTarget, providerUsageMethodOptions, Search, SelectControl,
   resolveProviderDeepLinkPreset, ShieldCheck, splitLines, Switch, Tabs, TabsList, TabsTrigger, Textarea, Toggle, translatedProviderProtocolLabel, translateOptions,
   translateProbeProtocolMessage, Trash2, uniqueProviderName, uniqueProviderProtocols, useAppErrorText, useAppText, useEffect, useLayoutEffect, useMemo,
@@ -2846,6 +2846,9 @@ function ProviderUsageSettings({
   const showNewApiUserBalanceTemplate = probe?.detectedProvider === "new-api" ||
     draft.accountConnectorsText.includes("new-api-key-usage") ||
     draft.accountConnectorsText.includes("new-api-user-self");
+  const openCodeGoConnector = opencodeGoUsageConnectorFromText(draft.accountConnectorsText);
+  const showOpenCodeGoCredentials = draft.presetId === "opencode-go" || Boolean(openCodeGoConnector);
+  const openCodeGoValues = opencodeGoUsageCredentialValues(openCodeGoConnector);
 
   useEffect(() => {
     setTestResult(undefined);
@@ -2893,6 +2896,27 @@ function ProviderUsageSettings({
 
   function selectPath(target: ProviderUsageFieldTarget, path: string) {
     onChange(providerUsageFieldPatch(target, path));
+  }
+
+  function updateOpenCodeGoCredentials(patch: { authCookie?: string; workspaceId?: string }) {
+    onChange({
+      accountConnectorsText: providerAccountConnectorsTextWithOpenCodeGoCredentials(
+        draft.accountConnectorsText,
+        {
+          authCookie: patch.authCookie ?? openCodeGoValues.authCookie,
+          workspaceId: patch.workspaceId ?? openCodeGoValues.workspaceId
+        }
+      )
+    });
+  }
+
+  function insertOpenCodeGoUsageConnector() {
+    onChange({
+      accountConnectorsText: providerAccountConnectorsTextWithOpenCodeGoCredentials(
+        draft.accountConnectorsText,
+        { authCookie: "", workspaceId: "" }
+      )
+    });
   }
 
   function insertNewApiUserBalanceTemplate() {
@@ -3041,6 +3065,38 @@ function ProviderUsageSettings({
                   </button>
                 </div>
               </Field>
+              {!showOpenCodeGoCredentials ? (
+                <div className="sm:col-span-2 flex flex-wrap items-center gap-2">
+                  <Button size="sm" type="button" variant="outline" onClick={insertOpenCodeGoUsageConnector}>
+                    {t("Insert OpenCode Go usage connector")}
+                  </Button>
+                  <span className="text-[11px] text-muted-foreground">{t("Adds a connector that reads the OpenCode Go quota page with a workspace ID and auth cookie.")}</span>
+                </div>
+              ) : null}
+              {showOpenCodeGoCredentials ? (
+                <div className="sm:col-span-2 space-y-2 rounded-md border border-border/60 bg-muted/20 p-2">
+                  <Label className="text-[11px] font-medium text-muted-foreground">{t("OpenCode Go usage credentials")}</Label>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <Field label={t("Workspace ID")}>
+                      <Input
+                        placeholder="e.g. 123e4567-e89b-12d3-a456-426614174000"
+                        value={openCodeGoValues.workspaceId}
+                        onChange={(event) => updateOpenCodeGoCredentials({ workspaceId: event.target.value })}
+                      />
+                    </Field>
+                    <Field label={t("Auth cookie")}>
+                      <Input
+                        placeholder="auth cookie value from opencode.ai"
+                        value={openCodeGoValues.authCookie}
+                        onChange={(event) => updateOpenCodeGoCredentials({ authCookie: event.target.value })}
+                      />
+                    </Field>
+                  </div>
+                  <div className="text-[11px] leading-4 text-muted-foreground">
+                    {t("Get the workspace ID from the opencode.ai workspace URL and the auth cookie from browser DevTools (Application → Cookies → opencode.ai). The cookie is stored only in your local CCR config.")}
+                  </div>
+                </div>
+              ) : null}
               {showNewApiUserBalanceTemplate ? (
                 <div className="grid grid-cols-1 items-end gap-2 rounded-md border border-border/60 bg-muted/20 p-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                   <div className="min-w-0 space-y-1">

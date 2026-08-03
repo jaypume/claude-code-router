@@ -6,7 +6,12 @@ import type {
   GatewayProviderProtocol,
   LocalAgentProviderCandidate,
   LocalAgentProviderImportResult,
+  ProviderAccountConfig,
   ProviderAccountConnectorConfig
+} from "@ccr/core/contracts/app";
+import {
+  OPEN_CODE_GO_AUTH_COOKIE_PLACEHOLDER,
+  OPEN_CODE_GO_WORKSPACE_PLACEHOLDER
 } from "@ccr/core/contracts/app";
 import {
   apiKeyAuthPlugin,
@@ -47,6 +52,10 @@ type OpenCodeProtocol = Exclude<GatewayProviderProtocol, "gemini_interactions">;
 
 const openCodeProviderId = "opencode";
 const openCodeDefaultBaseUrl = "https://opencode.ai/zen/v1";
+const openCodeGoUsagePageUrl = "https://opencode.ai/workspace";
+
+export const openCodeGoWorkspacePlaceholder = OPEN_CODE_GO_WORKSPACE_PLACEHOLDER;
+export const openCodeGoAuthCookiePlaceholder = OPEN_CODE_GO_AUTH_COOKIE_PLACEHOLDER;
 const openCodeProtocolOrder: OpenCodeProtocol[] = [
   "openai_responses",
   "anthropic_messages",
@@ -163,11 +172,36 @@ export function importOpenCodeProvider(
   const authSuffix = `opencode-${candidate.protocol.replaceAll("_", "-")}-api-key`;
   return {
     candidate,
-    provider,
+    provider: providerPayload(
+      candidate,
+      uniqueProviderName(providerNames, candidate.name),
+      catalog.baseUrl,
+      openCodeGoProviderAccountConfig()
+    ),
     providerPlugins: [
       openCodeAuthPlugin(candidate.protocol, authSuffix, apiKey),
       openCodeAuthPlugin(candidate.protocol, `${authSuffix}-internal`, apiKey, providerInternalNamePlaceholder)
     ]
+  };
+}
+
+export function openCodeGoProviderAccountConfig(): ProviderAccountConfig {
+  return {
+    connectors: [
+      {
+        auth: "none",
+        endpoint: `${openCodeGoUsagePageUrl}/${openCodeGoWorkspacePlaceholder}/go`,
+        headers: {
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          Cookie: `auth=${openCodeGoAuthCookiePlaceholder}`,
+          "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        },
+        mapping: { meters: [] },
+        parser: "opencode-go-usage",
+        type: "http-json"
+      }
+    ],
+    enabled: true
   };
 }
 

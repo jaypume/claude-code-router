@@ -43,6 +43,7 @@ import type {
   VirtualModelToolVisibility
 } from "@ccr/core/contracts/app";
 import anthropicProviderIconUrl from "@/assets/provider-icons/anthropic.png";
+import openCodeProviderIconUrl from "@/assets/agent-logos/opencode.ico";
 import bailianProviderIconUrl from "@/assets/provider-icons/bailian.ico";
 import claudeapiProviderIconUrl from "@/assets/provider-icons/claudeapi.png";
 import code0ProviderIconUrl from "@/assets/provider-icons/code0.png";
@@ -373,6 +374,7 @@ export const providerPresetIconUrls: Record<string, string> = {
   "moonshot-global": moonshotProviderIconUrl,
   nvidia: nvidiaProviderIconUrl,
   openai: openaiProviderIconUrl,
+  "opencode-go": openCodeProviderIconUrl,
   openrouter: openrouterProviderIconUrl,
   "qiniu-ai": qiniuAiProviderIconUrl,
   runapi: runapiProviderIconUrl,

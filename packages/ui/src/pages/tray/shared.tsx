@@ -10,7 +10,7 @@ import { DEFAULT_TRAY_COMPONENT_VARIANTS, DEFAULT_TRAY_WIDGETS, DEFAULT_TRAY_WIN
 import { formatLocalizedErrorMessage } from "@ccr/core/contracts/i18n";
 import { findProviderPreset, findProviderPresetByBaseUrl, providerPresets } from "@ccr/core/providers/presets";
 import { providerPresetIconUrls } from "../home/shared/options";
-import { formatProviderAccountMeterTitleCompact } from "../home/shared/provider-accounts";
+import { formatOpenCodeGoUsageValue, formatProviderAccountMeterTitleCompact, isOpenCodeGoUsageMeter, openCodeGoUsageMetersForDisplay } from "../home/shared/provider-accounts";
 import type {
   AppConfig,
   GatewayProviderConfig,
@@ -31,7 +31,7 @@ import type {
 
 export  {
   createContext, useCallback, useContext, useEffect, useMemo, useState, createRoot,
-  LoaderCircle, Power, RefreshCw, appLogoUrl, trayCyanIconUrl, trayOrangeIconUrl, trayVioletIconUrl, DEFAULT_TRAY_COMPONENT_VARIANTS, DEFAULT_TRAY_WIDGETS, DEFAULT_TRAY_WINDOW_MODULES, TRAY_SINGLETON_WIDGET_TYPES, TRAY_TOP_WIDGET_TYPES, TRAY_WINDOW_MODULE_IDS
+  isOpenCodeGoUsageMeter, LoaderCircle, openCodeGoUsageMetersForDisplay, Power, RefreshCw, appLogoUrl, trayCyanIconUrl, trayOrangeIconUrl, trayVioletIconUrl, DEFAULT_TRAY_COMPONENT_VARIANTS, DEFAULT_TRAY_WIDGETS, DEFAULT_TRAY_WINDOW_MODULES, TRAY_SINGLETON_WIDGET_TYPES, TRAY_TOP_WIDGET_TYPES, TRAY_WINDOW_MODULE_IDS
 };
 export type {
   ReactNode, AppConfig, ProviderAccountMeter, ProviderAccountSnapshot, TrayBalanceProgressConfig, TrayComponentVariants, TrayWidgetConfig, TrayWidgetType, TrayWidgetVariant, TrayWindowModuleId, UsageComparisonRow,
@@ -74,6 +74,9 @@ export const trayText: Record<ResolvedLanguage, Record<string, string>> = {
     "Credit balance": "信用余额",
     "Current balance": "当前余额",
     "5h quota": "5 小时额度",
+    "Go 5-hour limit": "5H用量",
+    "Go monthly limit": "1M用量",
+    "Go weekly limit": "7D用量",
     "F": "五",
     "Granted balance": "赠送余额",
     "Input": "输入",
@@ -818,6 +821,10 @@ function meterDetailTimestamp(value: string | undefined): number | undefined {
 }
 
 export function formatAccountMeterValue(meter: ProviderAccountMeter, translate: (value: string) => string): string {
+  // OpenCode Go 用量行：与 dashboard 一致，显示「用量金额 | 用量百分比」而非剩余额度
+  if (isOpenCodeGoUsageMeter(meter)) {
+    return formatOpenCodeGoUsageValue(meter);
+  }
   const value = meter.remaining ?? meter.used ?? meter.limit;
   if (value === undefined) {
     return "-";

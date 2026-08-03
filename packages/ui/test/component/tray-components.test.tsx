@@ -231,10 +231,75 @@ test("AccountSummaryPanel prioritizes Codex manual reset meter with expiration",
 
   assert.match(html, /Primary quota/);
   assert.match(html, /Manual resets/);
-  assert.match(html, /☀️ \d+d\d+h/);
+  assert.match(html, /☀️\s+\d+d\d+h/);
   assert.match(html, /2 resets/);
   assert.match(html, /width:/);
   assert.doesNotMatch(html, /Secondary quota/);
+});
+
+test("AccountSummaryPanel renders OpenCode Go usage as three windows with used amounts", () => {
+  const future = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+  const html = renderToStaticMarkup(
+    <AccountSummaryPanel
+      snapshots={[
+        {
+          meters: [
+            {
+              id: "opencode_go_rolling",
+              kind: "quota",
+              label: "Go 5-hour limit",
+              limit: 12,
+              remaining: 12,
+              resetAt: future,
+              unit: "USD",
+              used: 0,
+              window: "5h"
+            },
+            {
+              id: "opencode_go_weekly",
+              kind: "quota",
+              label: "Go weekly limit",
+              limit: 30,
+              remaining: 29.7,
+              resetAt: future,
+              unit: "USD",
+              used: 0.3,
+              window: "weekly"
+            },
+            {
+              id: "opencode_go_monthly",
+              kind: "quota",
+              label: "Go monthly limit",
+              limit: 60,
+              remaining: 53.4,
+              resetAt: future,
+              unit: "USD",
+              used: 6.6,
+              window: "monthly"
+            }
+          ],
+          provider: "opencode-go",
+          source: "http-json",
+          status: "ok",
+          updatedAt: new Date().toISOString()
+        }
+      ]}
+      variant="stacked"
+    />
+  );
+
+  // 三行固定：5H/7D/1M 全部渲染
+  assert.match(html, /Go 5-hour limit/);
+  assert.match(html, /Go weekly limit/);
+  assert.match(html, /Go monthly limit/);
+  // 用量格式（金额+百分比），而非剩余额度
+  assert.match(html, /\(\$0\.00\)[\s\S]*?0%/);
+  assert.match(html, /\(\$0\.30\)[\s\S]*?1%/);
+  assert.match(html, /\(\$6\.60\)[\s\S]*?11%/);
+  // 月窗口用 🈷️ 图标
+  assert.match(html, /🈷️/);
+  // opencode-go 不显示剩余进度条
+  assert.doesNotMatch(html, /width:/);
 });
 
 test("RangeSwitch renders every usage range option", () => {

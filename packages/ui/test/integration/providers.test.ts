@@ -8,6 +8,7 @@ import { minimaxChinaProviderPreset } from "@ccr/core/providers/presets/minimax/
 import { moonshotGlobalProviderPreset } from "@ccr/core/providers/presets/moonshot/index.ts";
 import { qiniuAiProviderPreset } from "@ccr/core/providers/presets/qiniu-ai/index.ts";
 import { AddProviderDialog, AddProviderForm, ProviderConnectivityCheckDialog, ProvidersView, uniqueProviderProbeProtocolRows } from "@ccr/ui/pages/home/components/providers.tsx";
+import { ProviderAccountSinglePanel } from "@ccr/ui/pages/home/components/dashboard.tsx";
 import {
   applyProviderProbeResult,
   createProviderConfigFromDeepLink,
@@ -25,6 +26,12 @@ import {
   providerConnectivityProviderPlugins,
   providerDisplayIcon,
   providerAccountConnectorsTextWithNewApiUserBalanceTemplate,
+  opencodeGoUsageConnectorFromText,
+  opencodeGoUsageCredentialValues,
+  formatOpenCodeGoUsageValue,
+  isOpenCodeGoUsageMeter,
+  openCodeGoUsageMetersForDisplay,
+  providerAccountConnectorsTextWithOpenCodeGoCredentials,
   providerGlobalBaseUrlForProbe,
   providerPresetIconUrls,
   providerProtocolOptions,
@@ -1302,6 +1309,157 @@ test("raw account connectors win over stale form URL on save", () => {
   assert.equal(meters[0].window, "5h");
   assert.equal(meters[1].id, "weekly_quota");
   assert.equal(meters[1].window, "weekly");
+});
+
+test("OpenCode Go credentials panel extracts and writes workspace ID and auth cookie", () => {
+  const template = JSON.stringify([
+    {
+      auth: "none",
+      endpoint: "https://opencode.ai/workspace/{workspaceId}/go",
+      headers: {
+        Accept: "text/html",
+        Cookie: "auth={authCookie}",
+        "User-Agent": "Mozilla/5.0"
+      },
+      mapping: { meters: [] },
+      parser: "opencode-go-usage",
+      type: "http-json"
+    },
+    {
+      auth: "provider-api-key",
+      type: "standard"
+    }
+  ], null, 2);
+
+  const connector = opencodeGoUsageConnectorFromText(template);
+  assert.equal(connector?.parser, "opencode-go-usage");
+  assert.deepEqual(opencodeGoUsageCredentialValues(connector), { authCookie: "", workspaceId: "" });
+
+  const written = providerAccountConnectorsTextWithOpenCodeGoCredentials(template, {
+    authCookie: "real-cookie",
+    workspaceId: "ws-123"
+  });
+  const connectors = JSON.parse(written);
+  assert.equal(connectors.length, 2);
+  assert.equal(connectors[0].endpoint, "https://opencode.ai/workspace/ws-123/go");
+  assert.equal(connectors[0].headers.Cookie, "auth=real-cookie");
+  assert.equal(connectors[1].type, "standard");
+
+  const roundTrip = opencodeGoUsageCredentialValues(opencodeGoUsageConnectorFromText(written));
+  assert.deepEqual(roundTrip, { authCookie: "real-cookie", workspaceId: "ws-123" });
+});
+
+test("OpenCode Go credentials panel keeps placeholders when inputs are blank", () => {
+  const template = JSON.stringify([
+    {
+      auth: "none",
+      endpoint: "https://opencode.ai/workspace/{workspaceId}/go",
+      headers: { Cookie: "auth={authCookie}" },
+      mapping: { meters: [] },
+      parser: "opencode-go-usage",
+      type: "http-json"
+    }
+  ]);
+  const written = providerAccountConnectorsTextWithOpenCodeGoCredentials(template, {
+    authCookie: "  ",
+    workspaceId: ""
+  });
+  const connector = JSON.parse(written)[0];
+  assert.equal(connector.endpoint, "https://opencode.ai/workspace/{workspaceId}/go");
+  assert.equal(connector.headers.Cookie, "auth={authCookie}");
+});
+
+test("OpenCode Go credentials panel appends a connector when none exists", () => {
+  const template = JSON.stringify([
+    {
+      auth: "provider-api-key",
+      type: "standard"
+    }
+  ]);
+  const written = providerAccountConnectorsTextWithOpenCodeGoCredentials(template, {
+    authCookie: "real-cookie",
+    workspaceId: "ws-9"
+  });
+  const connectors = JSON.parse(written);
+  assert.equal(connectors.length, 2);
+  assert.equal(connectors[0].type, "standard");
+  assert.equal(connectors[1].parser, "opencode-go-usage");
+  assert.equal(connectors[1].endpoint, "https://opencode.ai/workspace/ws-9/go");
+  assert.equal(connectors[1].headers.Cookie, "auth=real-cookie");
+
+  const again = providerAccountConnectorsTextWithOpenCodeGoCredentials(written, {
+    authCookie: "real-cookie",
+    workspaceId: "ws-9"
+  });
+  assert.equal(JSON.parse(again).length, 2);
+});
+
+test("OpenCode Go usage value shows used amount with percentage and blanks when expired", () => {
+  const future = new Date(Date.now() + 60_000).toISOString();
+  const past = new Date(Date.now() - 60_000).toISOString();
+  assert.equal(isOpenCodeGoUsageMeter({ id: "opencode_go_rolling", kind: "quota", label: "Go 5-hour limit", limit: 12, remaining: 8.4, used: 3.6, resetAt: future, unit: "USD", window: "5h" }), true);
+  assert.equal(isOpenCodeGoUsageMeter({ id: "grok_subscription_access", kind: "subscription", label: "Subscription access", unit: "%" }), false);
+  assert.equal(
+    formatOpenCodeGoUsageValue({ id: "opencode_go_rolling", kind: "quota", label: "Go 5-hour limit", limit: 12, remaining: 8.4, used: 3.6, resetAt: future, unit: "USD", window: "5h" }),
+    "($3.60) 30%"
+  );
+  assert.equal(
+    formatOpenCodeGoUsageValue({ id: "opencode_go_monthly", kind: "quota", label: "Go monthly limit", limit: 60, remaining: 48.6, used: 11.4, resetAt: past, unit: "USD", window: "monthly" }),
+    ""
+  );
+  assert.equal(
+    formatOpenCodeGoUsageValue({ id: "opencode_go_weekly", kind: "quota", label: "Go weekly limit", limit: 30, remaining: 30, unit: "USD", window: "weekly" }),
+    ""
+  );
+  assert.equal(
+    formatOpenCodeGoUsageValue({ id: "opencode_go_weekly", kind: "quota", label: "Go weekly limit", used: 1.5, resetAt: future, unit: "USD", window: "weekly" }),
+    "($1.50)"
+  );
+});
+
+test("OpenCode Go display meters pad missing quota windows", () => {
+  const meters = openCodeGoUsageMetersForDisplay({
+    credentialId: "key-1",
+    meters: [
+      { id: "opencode_go_rolling", kind: "quota", label: "Go 5-hour limit", limit: 12, remaining: 12, used: 0, unit: "USD", window: "5h" },
+      { id: "opencode_go_weekly", kind: "quota", label: "Go weekly limit", limit: 30, remaining: 29.7, used: 0.3, unit: "USD", window: "weekly" }
+    ],
+    provider: "opencode-go",
+    source: "http-json",
+    status: "ok",
+    updatedAt: new Date().toISOString()
+  });
+  assert.deepEqual(meters.map((meter) => meter.window), ["5h", "weekly", "monthly"]);
+  assert.equal(meters[2].id, "opencode_go_monthly");
+  assert.equal(meters[2].used, undefined);
+  assert.equal(formatOpenCodeGoUsageValue(meters[2]), "");
+});
+
+test("OpenCode Go single account panel renders all three quota windows with a padded row", () => {
+  const future = new Date(Date.now() + 3_600_000).toISOString();
+  const account = {
+    meters: [
+      { id: "opencode_go_rolling", kind: "quota", label: "Go 5-hour limit", limit: 12, remaining: 12, used: 0, resetAt: future, unit: "USD", window: "5h" },
+      { id: "opencode_go_weekly", kind: "quota", label: "Go weekly limit", limit: 30, remaining: 29.7, used: 0.3, resetAt: future, unit: "USD", window: "weekly" }
+    ],
+    provider: "opencode-go",
+    source: "http-json",
+    status: "ok",
+    updatedAt: new Date().toISOString()
+  };
+  const html = renderToStaticMarkup(
+    React.createElement(ProviderAccountSinglePanel, {
+      account,
+      dimensions: { height: 3, width: 3 },
+      onRefresh: undefined,
+      variant: "cards"
+    })
+  );
+  assert.match(html, /Go 5-hour limit/);
+  assert.match(html, /Go weekly limit/);
+  assert.match(html, /Go monthly limit/);
+  assert.match(html, /\(\$0\.00\)[\s\S]*?0%/);
+  assert.match(html, /\(\$0\.30\)[\s\S]*?1%/);
 });
 
 test("quota meter connectors reopen in raw mode without dropping meters", () => {

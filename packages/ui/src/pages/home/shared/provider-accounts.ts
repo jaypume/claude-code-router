@@ -184,6 +184,61 @@ export function formatProviderAccountNumber(value: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 6 }).format(value);
 }
 
+export function isOpenCodeGoUsageMeter(meter: ProviderAccountMeter): boolean {
+  return meter.id.startsWith("opencode_go_");
+}
+
+// OpenCode Go 固定三个配额窗口（5H/7D/1M）；网页响应缺某个窗口时补占位行，保证三行始终显示，
+// 缺数据的行 value 为空（formatOpenCodeGoUsageValue 对 used=undefined 返回空串）。
+export function openCodeGoUsageMetersForDisplay(account: ProviderAccountSnapshot): ProviderAccountMeter[] {
+  const meters = account.meters.filter(isOpenCodeGoUsageMeter);
+  const windows = new Set(meters.map((meter) => meter.window ?? meter.id));
+  const placeholders = openCodeGoUsageWindowSpecs
+    .filter((spec) => !windows.has(spec.window))
+    .map((spec) => ({
+      id: spec.id,
+      kind: "quota" as const,
+      label: spec.label,
+      source: "http-json" as const,
+      unit: "USD",
+      window: spec.window
+    }));
+  return [...meters, ...placeholders];
+}
+
+const openCodeGoUsageWindowSpecs = [
+  { id: "opencode_go_rolling", label: "Go 5-hour limit", window: "5h" },
+  { id: "opencode_go_weekly", label: "Go weekly limit", window: "weekly" },
+  { id: "opencode_go_monthly", label: "Go monthly limit", window: "monthly" }
+] as const;
+
+// OpenCode Go 用量行专用：显示「用量金额 | 用量百分比」（如 $3.60 | 30%），而非剩余额度；
+// 窗口已过期或没有用量数据时返回空串（不显示数值）。
+export function formatOpenCodeGoUsageValue(meter: ProviderAccountMeter, now = Date.now()): string {
+  const parts = formatOpenCodeGoUsageParts(meter, now);
+  if (!parts) {
+    return "";
+  }
+  return `(${parts.usedText})${parts.percentText ? ` ${parts.percentText}` : ""}`;
+}
+
+// 结构化用量展示：金额（含 $ 前缀，固定两位小数对齐）与百分比（两位数字对齐）分开返回，供卡片分色渲染；
+// 窗口已过期或没有用量数据时返回 undefined（不显示数值）。
+export function formatOpenCodeGoUsageParts(meter: ProviderAccountMeter, now = Date.now()): { usedText: string; percentText: string } | undefined {
+  if (meter.used === undefined) {
+    return undefined;
+  }
+  if (meter.resetAt !== undefined && new Date(meter.resetAt).getTime() <= now) {
+    return undefined;
+  }
+  const usedText = `$${meter.used.toFixed(2)}`;
+  if (!meter.limit || meter.limit <= 0) {
+    return { usedText, percentText: "" };
+  }
+  const percent = Math.round((meter.used / meter.limit) * 100);
+  return { usedText, percentText: `${String(percent).padStart(2, " ")}%` };
+}
+
 // 仅返回剩余时长（如「3h28m」「1d17h」「05m」）；非法时间或已过期返回 undefined
 // 与 formatProviderAccountReset 的差异：不携带「expires in / expired」文案前缀
 // （dashboard 的 meter 行用 🕛/📆 图标代替文字前缀）。
@@ -239,8 +294,9 @@ export function formatProviderAccountMeterTitleCompact(
   if (duration === undefined) {
     return `${label} ${translate("expired")}`;
   }
-  const icon = duration.includes("d") ? "☀️" : "🕛";
-  return `${label} ${icon} ${duration}`;
+  const icon = meter.window === "monthly" && isOpenCodeGoUsageMeter(meter) ? "🈷️" : duration.includes("d") ? "☀️" : "🕛";
+  // 倒计时左补不换行空格到 6 字符（等宽字体下各行右对齐，如 ` 6d01h` / `25d12h`；普通空格会被 HTML 折叠）
+  return `${label} ${icon} ${duration.padStart(6, "\u00A0")}`;
 }
 
 export function isProviderAccountManualResetMeter(meter: ProviderAccountMeter): boolean {

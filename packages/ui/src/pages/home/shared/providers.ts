@@ -5,6 +5,8 @@ import openCodeLogoUrl from "@/assets/agent-logos/opencode.ico";
 import zcodeLogoUrl from "@/assets/agent-logos/zcode.png";
 import moonshotProviderIconUrl from "@/assets/provider-icons/moonshot.ico";
 import {
+  OPEN_CODE_GO_AUTH_COOKIE_PLACEHOLDER,
+  OPEN_CODE_GO_WORKSPACE_PLACEHOLDER,
   ROUTER_SCRIPT_API_VERSION,
   ROUTER_SCRIPT_MAX_TIMEOUT_MS
 } from "@ccr/core/contracts/app";
@@ -1536,8 +1538,9 @@ export function cloneProviderAccountConnectors(connectors: ProviderAccountConnec
 }
 
 export function defaultProviderAccountConfigForPreset(presetId: string | undefined): ProviderAccountConfig | undefined {
-  if (presetId === "kimi-coding") {
-    return cloneProviderAccountConfig(findProviderPreset(presetId)?.account ?? defaultProviderAccountConfig);
+  const preset = presetId ? findProviderPreset(presetId) : undefined;
+  if (preset?.account && (preset.account.connectors?.length ?? 0) > 0) {
+    return cloneProviderAccountConfig(preset.account);
   }
   // Keep the advanced settings default on the standard endpoint; main resolves preset-specific connectors at runtime.
   return cloneProviderAccountConfig(defaultProviderAccountConfig);
@@ -1612,6 +1615,101 @@ export function providerAccountConnectorsTextWithNewApiUserBalanceTemplate(conne
 
 function isNewApiUserSelfConnector(value: unknown): boolean {
   return isPlainRecord(value) && value.type === "http-json" && value.parser === "new-api-user-self";
+}
+
+export function opencodeGoUsageConnectorFromText(connectorsText: string): ProviderAccountHttpJsonConnectorConfig | undefined {
+  let connectors: unknown[] = [];
+  try {
+    const parsed = JSON.parse(connectorsText.trim() || "[]") as unknown;
+    connectors = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return undefined;
+  }
+  const connector = connectors.find((item) =>
+    isPlainRecord(item) && item.type === "http-json" && item.parser === "opencode-go-usage"
+  );
+  return isPlainRecord(connector) ? connector as unknown as ProviderAccountHttpJsonConnectorConfig : undefined;
+}
+
+export function opencodeGoUsageCredentialValues(connector: ProviderAccountHttpJsonConnectorConfig | undefined): { authCookie: string; workspaceId: string } {
+  if (!connector) {
+    return { authCookie: "", workspaceId: "" };
+  }
+  const workspaceId = opencodeGoWorkspaceIdFromEndpoint(connector.endpoint);
+  const authCookie = opencodeGoAuthCookieFromHeaders(connector.headers);
+  return { authCookie, workspaceId };
+}
+
+export function providerAccountConnectorsTextWithOpenCodeGoCredentials(
+  connectorsText: string,
+  values: { authCookie: string; workspaceId: string }
+): string {
+  let connectors: unknown[] = [];
+  try {
+    const parsed = JSON.parse(connectorsText.trim() || "[]") as unknown;
+    connectors = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    connectors = [];
+  }
+  const workspaceId = values.workspaceId.trim() || OPEN_CODE_GO_WORKSPACE_PLACEHOLDER;
+  const authCookie = values.authCookie.trim() || OPEN_CODE_GO_AUTH_COOKIE_PLACEHOLDER;
+  const updated = connectors.map((item) => {
+    if (!isPlainRecord(item) || item.type !== "http-json" || item.parser !== "opencode-go-usage") {
+      return item;
+    }
+    const endpoint = typeof item.endpoint === "string" && item.endpoint.trim()
+      ? item.endpoint
+      : `https://opencode.ai/workspace/${OPEN_CODE_GO_WORKSPACE_PLACEHOLDER}/go`;
+    const headers = isPlainRecord(item.headers) ? { ...item.headers } : {};
+    const cookie = typeof headers.Cookie === "string" ? headers.Cookie : "";
+    return {
+      ...item,
+      endpoint: endpoint.replace(OPEN_CODE_GO_WORKSPACE_PLACEHOLDER, workspaceId),
+      headers: {
+        ...headers,
+        Cookie: cookie.replace(OPEN_CODE_GO_AUTH_COOKIE_PLACEHOLDER, authCookie)
+      }
+    };
+  });
+  if (!updated.some((item) => isPlainRecord(item) && item.type === "http-json" && item.parser === "opencode-go-usage")) {
+    updated.push(opencodeGoUsageConnectorTemplate(workspaceId, authCookie));
+  }
+  return JSON.stringify(updated, null, 2);
+}
+
+function opencodeGoUsageConnectorTemplate(workspaceId: string, authCookie: string): Record<string, unknown> {
+  return {
+    auth: "none",
+    endpoint: `https://opencode.ai/workspace/${workspaceId}/go`,
+    headers: {
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      Cookie: `auth=${authCookie}`,
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    },
+    mapping: { meters: [] },
+    parser: "opencode-go-usage",
+    type: "http-json"
+  };
+}
+
+function opencodeGoWorkspaceIdFromEndpoint(endpoint: string | undefined): string {
+  if (!endpoint) {
+    return "";
+  }
+  const match = endpoint.match(/\/workspace\/([^/]+)\/go/);
+  if (!match) {
+    return "";
+  }
+  return match[1] === OPEN_CODE_GO_WORKSPACE_PLACEHOLDER ? "" : match[1];
+}
+
+function opencodeGoAuthCookieFromHeaders(headers: Record<string, string> | undefined): string {
+  const cookie = headers?.Cookie ?? "";
+  const match = cookie.match(/^auth=(.*)$/);
+  if (!match) {
+    return "";
+  }
+  return match[1] === OPEN_CODE_GO_AUTH_COOKIE_PLACEHOLDER ? "" : match[1];
 }
 
 export function toProviderProtocol(value: string | undefined): GatewayProviderProtocol | undefined {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   accountMetersForDisplay, accountProgressClass, accountProgressColor, accountSnapshotLabel, compareAccountSnapshots, formatAccountMeterTitle, formatAccountMeterValue,
-  LoaderCircle, meterProgress, meterRemainingRatio, meterValidityProgress, ProviderAccountMeter, ProviderAccountSnapshot, RefreshCw, TrayComponentVariants,
+  isOpenCodeGoUsageMeter, LoaderCircle, meterProgress, meterRemainingRatio, meterValidityProgress, openCodeGoUsageMetersForDisplay, ProviderAccountMeter, ProviderAccountSnapshot, RefreshCw, TrayComponentVariants,
   useTrayText
 } from "../shared";
 import { RadialMetric } from "./widgets";
@@ -41,7 +41,10 @@ export function AccountSummaryPanel({
     );
   }
 
-  const meters = accountMetersForDisplay(snapshot, variant === "stacked" ? 3 : 2);
+  // OpenCode Go 固定显示三个配额窗口（5H/7D/1M），缺数据窗口补占位行；其余账户按变体行数限制展示。
+  const meters = snapshot.meters.some(isOpenCodeGoUsageMeter)
+    ? openCodeGoUsageMetersForDisplay(snapshot)
+    : accountMetersForDisplay(snapshot, variant === "stacked" ? 3 : 2);
 
   return (
     <div className="tray-panel p-2.5">
@@ -100,7 +103,7 @@ function AccountMeters({
         {meters.map((meter) => (
           <div className="tray-stat-cell min-w-0 px-2 py-1" key={meter.id}>
             <div className="truncate text-[9px] font-medium font-mono text-slate-400">{formatAccountMeterTitle(meter, t)}</div>
-            <div className="truncate text-[12px] font-bold text-slate-50">{formatAccountMeterValue(meter, t)}</div>
+            <div className="truncate font-mono text-[12px] font-bold text-slate-50">{formatAccountMeterValue(meter, t)}</div>
           </div>
         ))}
       </div>
@@ -121,9 +124,9 @@ function AccountMeters({
     return (
       <div className="space-y-1.5">
         {meters.map((meter) => {
-          const progress = meterProgress(meter) ?? meterValidityProgress(meter);
+          const progress = isOpenCodeGoUsageMeter(meter) ? undefined : (meterProgress(meter) ?? meterValidityProgress(meter));
           return (
-            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_56px] items-center gap-2" key={meter.id}>
+            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,auto)] items-center gap-2" key={meter.id}>
               <div className="min-w-0">
                 <div className="truncate text-[10px] font-medium font-mono text-slate-400">{formatAccountMeterTitle(meter, t)}</div>
                 {progress !== undefined ? (
@@ -132,7 +135,7 @@ function AccountMeters({
                   </div>
                 ) : null}
               </div>
-              <div className="truncate text-right text-[12px] font-bold text-slate-50">{formatAccountMeterValue(meter, t)}</div>
+              <div className="truncate text-right font-mono text-[12px] font-bold text-slate-50">{formatAccountMeterValue(meter, t)}</div>
             </div>
           );
         })}
@@ -143,12 +146,12 @@ function AccountMeters({
   return (
     <div className="space-y-1.5">
       {meters.map((meter) => {
-        const progress = meterProgress(meter) ?? meterValidityProgress(meter);
+        const progress = isOpenCodeGoUsageMeter(meter) ? undefined : (meterProgress(meter) ?? meterValidityProgress(meter));
         return (
           <div className="min-w-0" key={meter.id}>
             <div className="flex min-w-0 items-end justify-between gap-2">
               <div className="min-w-0 truncate text-[10px] font-medium font-mono text-slate-400">{formatAccountMeterTitle(meter, t)}</div>
-              <div className="shrink-0 text-[13px] font-bold text-slate-50">{formatAccountMeterValue(meter, t)}</div>
+              <div className="shrink-0 font-mono text-[13px] font-bold text-slate-50">{formatAccountMeterValue(meter, t)}</div>
             </div>
             {progress !== undefined ? (
               <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/10">

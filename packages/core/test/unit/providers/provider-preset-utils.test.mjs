@@ -25,6 +25,9 @@ import {
   nvidiaProviderPreset
 } from "@ccr/core/providers/presets/nvidia/index.ts";
 import {
+  openCodeGoProviderPreset
+} from "@ccr/core/providers/presets/opencode-go/index.ts";
+import {
   providerPresets
 } from "@ccr/core/providers/presets/index.ts";
 import {
@@ -121,6 +124,18 @@ test("sponsor provider presets expose requested endpoints and protocols", () => 
   assert.deepEqual(infistarAiProviderPreset.endpoints[0]?.protocols, [
     "openai_chat_completions"
   ]);
+});
+
+test("OpenCode Go preset exposes a placeholder Go usage connector", () => {
+  assert.equal(providerPresets.find((preset) => preset.id === "opencode-go"), openCodeGoProviderPreset);
+  assert.equal(openCodeGoProviderPreset.account?.enabled, true);
+  const connector = openCodeGoProviderPreset.account?.connectors?.[0];
+  assert.equal(connector?.type, "http-json");
+  assert.equal(connector?.parser, "opencode-go-usage");
+  assert.equal(connector?.auth, "none");
+  assert.ok(connector?.endpoint.includes("{workspaceId}"));
+  assert.ok(connector?.headers?.Cookie.includes("{authCookie}"));
+  assert.equal(providerPresetMatchesBaseUrl(openCodeGoProviderPreset, "https://opencode.ai/zen/go/v1"), true);
 });
 
 test("NVIDIA preset exposes the hosted NIM OpenAI-compatible endpoint", () => {

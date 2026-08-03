@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   localAgentProviderAccountCredentialForTest,
   localCodexAccountCredentialForTest,
+  opencodeGoUsageMetersForTest,
   testProviderAccountConnector
 } from "@ccr/core/providers/account-service.ts";
 import {
@@ -439,6 +440,68 @@ function jwt(payload) {
 function base64url(value) {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
+
+test("OpenCode Go usage connector parses SolidJS SSR hydration windows", () => {
+  const meters = opencodeGoUsageMetersForTest(
+    `<html><script>window.__DATA__ = {rollingUsage:$R[30]={status:"ok",resetInSec:17562,usagePercent:1},weeklyUsage:$R[31]={status:"ok",resetInSec:533388,usagePercent:5},monthlyUsage:$R[32]={status:"ok",resetInSec:2485309,usagePercent:19}}</script></html>`
+  );
+  assert.equal(meters.length, 3);
+  assert.deepEqual(meters.map((meter) => meter.id), ["opencode_go_rolling", "opencode_go_weekly", "opencode_go_monthly"]);
+  assert.deepEqual(meters.map((meter) => meter.window), ["5h", "weekly", "monthly"]);
+  assert.deepEqual(meters.map((meter) => meter.limit), [12, 30, 60]);
+  assert.deepEqual(meters.map((meter) => meter.kind), ["quota", "quota", "quota"]);
+  assert.ok(Math.abs(meters[0].remaining - 11.88) < 1e-9);
+  assert.ok(Math.abs(meters[1].remaining - 28.5) < 1e-9);
+  assert.ok(Math.abs(meters[2].remaining - 48.6) < 1e-9);
+  assert.ok(meters.every((meter) => typeof meter.resetAt === "string"));
+});
+
+test("OpenCode Go usage connector parses a live opencode.ai page sample", () => {
+  // 真实页面片段（2026-08-04 抓取）：三个窗口都存在，usagePercent 均为整数
+  const html = `<script>window.__DATA__={rollingUsage:$R[33]={status:"ok",resetInSec:17510,usagePercent:0},weeklyUsage:$R[34]={status:"ok",resetInSec:525850,usagePercent:1},monthlyUsage:$R[35]={status:"ok",resetInSec:2205687,usagePercent:11}}</script>`;
+  const meters = opencodeGoUsageMetersForTest(html);
+  assert.equal(meters.length, 3);
+  assert.deepEqual(meters.map((meter) => meter.id), ["opencode_go_rolling", "opencode_go_weekly", "opencode_go_monthly"]);
+  assert.ok(Math.abs(meters[0].used) < 1e-9);
+  assert.ok(Math.abs(meters[1].used - 0.3) < 1e-9);
+  assert.ok(Math.abs(meters[2].used - 6.6) < 1e-9);
+  assert.ok(Math.abs(meters[2].remaining - 53.4) < 1e-9);
+});
+
+test("OpenCode Go usage connector falls back to inline window data", () => {
+  const meters = opencodeGoUsageMetersForTest(
+    `<html><body>weeklyUsage={status:"ok",resetInSec:533388,usagePercent:5}</body></html>`
+  );
+  assert.equal(meters.length, 1);
+  assert.equal(meters[0].id, "opencode_go_weekly");
+  assert.ok(Math.abs(meters[0].remaining - 28.5) < 1e-9);
+});
+
+test("OpenCode Go usage connector parses JSON quota payloads", () => {
+  const meters = opencodeGoUsageMetersForTest(JSON.stringify({
+    rolling: { status: "ok", usagePercent: 65, resetInSec: 2520 },
+    weekly: { status: "ok", usagePercent: 30, resets_in_seconds: 259200 },
+    monthly: { status: "ok", usagePercent: 12, resets_in_seconds: 1728000 }
+  }));
+  assert.equal(meters.length, 3);
+  assert.ok(Math.abs(meters[0].remaining - 4.2) < 1e-9);
+  assert.ok(Math.abs(meters[1].remaining - 21) < 1e-9);
+  assert.ok(Math.abs(meters[2].remaining - 52.8) < 1e-9);
+});
+
+test("OpenCode Go usage connector rejects placeholder credentials", () => {
+  assert.throws(
+    () => opencodeGoUsageMetersForTest(`<html>workspace {workspaceId} cookie {authCookie}</html>`),
+    /replace \{workspaceId\} and \{authCookie\}/
+  );
+});
+
+test("OpenCode Go usage connector rejects responses without quota data", () => {
+  assert.throws(
+    () => opencodeGoUsageMetersForTest(`<html><body>no usage here</body></html>`),
+    /Could not find OpenCode Go quota usage data/
+  );
+});
 
 test("getProviderAccountSnapshots refreshes only the requested credential", async (t) => {
   const previousFetch = globalThis.fetch;
