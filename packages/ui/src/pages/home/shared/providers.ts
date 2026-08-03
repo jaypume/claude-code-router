@@ -916,6 +916,34 @@ export function providerConnectivityApiKeyFromDraft(draft: Pick<AddProviderDraft
   return draft.apiKey.trim();
 }
 
+// 与 core 的 providerCredentialSlug 保持一致（runtime-topology.ts）；UI 侧不能 import 它，
+// 因为该模块会拉入 node 依赖（model-registry/gateway），破坏 renderer 构建。
+function providerCredentialUiSlug(value: string | undefined): string {
+  return (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "key";
+}
+
+export function providerCredentialUiRuntimeId(
+  provider: GatewayProviderConfig,
+  credential: ProviderCredentialConfig,
+  index = provider.credentials?.indexOf(credential) ?? -1
+): string {
+  const explicitId = credential.id?.trim();
+  if (explicitId) {
+    return explicitId;
+  }
+  const oneBasedIndex = index >= 0 ? index + 1 : 1;
+  const label = credential.name?.trim() || credential.label?.trim();
+  return label ? `${providerCredentialUiSlug(label)}-${oneBasedIndex}` : `key-${oneBasedIndex}`;
+}
+
+export function providerCredentialUiApiKey(credential: ProviderCredentialConfig): string {
+  return credential.api_key || credential.apiKey || credential.apikey || "";
+}
+
 export function providerCredentialDraftFromConfig(credential: ProviderCredentialConfig, index: number): ProviderCredentialDraft {
   return {
     apiKey: credential.api_key || credential.apiKey || credential.apikey || "",

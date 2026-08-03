@@ -15,6 +15,7 @@ import {
   OverviewWidgetType, OverviewWidgetVariant, Pencil, Pie, PieChart, Plus,
   PointerSensor, primaryProviderAccountMeter, providerAccountMeterDetailValidityProgress, providerAccountMeterProgress, providerAccountMetersForDisplay, providerAccountProgressClass, isGatewayProviderEnabled, isProviderAccountManualResetMeter,
   providerAccountSnapshotKey, providerAccountSnapshotLabel,
+  providerCredentialUiApiKey, providerCredentialUiRuntimeId,
   ProviderAccountMeter, ProviderAccountSnapshot, ReactNode, ReactPointerEvent, rectSortingStrategy, RefreshCw, Select,
   SelectControl, SortableContext, sortableKeyboardCoordinates, systemStatusPointTooltip,
   Tooltip, translateOptions, Trash2, UsageComparisonRow, usageRangeOptions,
@@ -49,8 +50,10 @@ export function OverviewView({
   overviewWidgets,
   providerAccounts,
   providerAccountRefreshing = false,
+  providers,
   refreshProviderAccounts,
   setUsageRange,
+  onToggleProviderCredential,
   usageFilters,
   usageRange,
   usageStats
@@ -59,8 +62,10 @@ export function OverviewView({
   overviewWidgets: OverviewWidgetConfig[];
   providerAccounts: ProviderAccountSnapshot[];
   providerAccountRefreshing?: boolean;
+  providers?: GatewayProviderConfig[];
   refreshProviderAccounts?: () => void | Promise<void>;
   setUsageRange: (range: UsageStatsRange) => void;
+  onToggleProviderCredential?: (providerName: string, credentialId: string) => void | Promise<void>;
   usageFilters?: OverviewUsageFilters;
   usageRange: UsageStatsRange;
   usageStats: UsageStatsSnapshot;
@@ -302,8 +307,10 @@ export function OverviewView({
                   onSelect={() => setSelectedWidgetId(widget.id)}
                 >
                   <OverviewWidgetRenderer
+                    onToggleProviderCredential={onToggleProviderCredential}
                     providerAccounts={providerAccounts}
                     providerAccountRefreshing={providerAccountRefreshing}
+                    providers={providers}
                     refreshProviderAccounts={refreshProviderAccounts}
                     usageRange={usageRange}
                     usageStats={usageStats}
@@ -321,8 +328,10 @@ export function OverviewView({
       <DragOverlay adjustScale={false}>
         {activeWidget ? (
           <OverviewWidgetDragOverlay
+            onToggleProviderCredential={onToggleProviderCredential}
             providerAccounts={providerAccounts}
             providerAccountRefreshing={providerAccountRefreshing}
+            providers={providers}
             refreshProviderAccounts={refreshProviderAccounts}
             usageRange={usageRange}
             usageStats={usageStats}
@@ -752,15 +761,19 @@ function SortableOverviewWidget({
 }
 
 function OverviewWidgetDragOverlay({
+  onToggleProviderCredential,
   providerAccounts,
   providerAccountRefreshing = false,
+  providers,
   refreshProviderAccounts,
   usageRange,
   usageStats,
   widget
 }: {
+  onToggleProviderCredential?: (providerName: string, credentialId: string) => void | Promise<void>;
   providerAccounts: ProviderAccountSnapshot[];
   providerAccountRefreshing?: boolean;
+  providers?: GatewayProviderConfig[];
   refreshProviderAccounts?: () => void | Promise<void>;
   usageRange: UsageStatsRange;
   usageStats: UsageStatsSnapshot;
@@ -769,8 +782,10 @@ function OverviewWidgetDragOverlay({
   return (
     <div className={cn("pointer-events-none overflow-hidden opacity-95 shadow-2xl", overviewWidgetOverlaySizeClass(widget.size))}>
       <OverviewWidgetRenderer
+        onToggleProviderCredential={onToggleProviderCredential}
         providerAccounts={providerAccounts}
         providerAccountRefreshing={providerAccountRefreshing}
+        providers={providers}
         refreshProviderAccounts={refreshProviderAccounts}
         usageRange={usageRange}
         usageStats={usageStats}
@@ -1011,15 +1026,19 @@ function overviewWidgetResizeCursor(axis: OverviewWidgetResizeAxis): string {
 }
 
 function OverviewWidgetRenderer({
+  onToggleProviderCredential,
   providerAccounts,
   providerAccountRefreshing = false,
+  providers,
   refreshProviderAccounts,
   usageRange,
   usageStats,
   widget
 }: {
+  onToggleProviderCredential?: (providerName: string, credentialId: string) => void | Promise<void>;
   providerAccounts: ProviderAccountSnapshot[];
   providerAccountRefreshing?: boolean;
+  providers?: GatewayProviderConfig[];
   refreshProviderAccounts?: () => void | Promise<void>;
   usageRange: UsageStatsRange;
   usageStats: UsageStatsSnapshot;
@@ -1030,7 +1049,7 @@ function OverviewWidgetRenderer({
   if (widget.type === "system-status") {
     content = <SystemStatusBar usageRange={usageRange} usageStats={usageStats} variant={widget.variant === "compact" ? "compact" : "timeline"} />;
   } else if (widget.type === "account-balance") {
-    content = <ProviderAccountsOverview accountProvider={widget.accountProvider} accounts={providerAccounts} dimensions={dimensions} refreshing={providerAccountRefreshing} variant={overviewAccountVariant(widget.variant)} onRefresh={refreshProviderAccounts} />;
+    content = <ProviderAccountsOverview accountProvider={widget.accountProvider} accounts={providerAccounts} dimensions={dimensions} onToggleProviderCredential={onToggleProviderCredential} providers={providers} refreshing={providerAccountRefreshing} variant={overviewAccountVariant(widget.variant)} onRefresh={refreshProviderAccounts} />;
   } else if (widget.type === "metric") {
     content = <OverviewMetricWidget metric={widget.metric ?? "requests"} totals={usageStats.totals} variant={overviewMetricVariant(widget.variant)} />;
   } else if (widget.type === "usage-trend") {
@@ -2292,6 +2311,8 @@ function ProviderAccountsOverview({
   accounts,
   dimensions,
   onRefresh,
+  onToggleProviderCredential,
+  providers,
   refreshing = false,
   variant = "cards"
 }: {
@@ -2299,17 +2320,27 @@ function ProviderAccountsOverview({
   accounts: ProviderAccountSnapshot[];
   dimensions: OverviewWidgetDimensions;
   onRefresh?: () => void | Promise<void>;
+  onToggleProviderCredential?: (providerName: string, credentialId: string) => void | Promise<void>;
+  providers?: GatewayProviderConfig[];
   refreshing?: boolean;
   variant?: OverviewAccountVariant;
 }) {
   const t = useAppText();
   const selectedAccountProvider = accountProvider?.trim();
   const sortedAccounts = [...accounts].sort(compareProviderAccountSnapshots);
-  const visibleAccounts = selectedAccountProvider
+  const snapshotAccounts = selectedAccountProvider
     ? sortedAccounts.filter((account) => providerAccountSelectionMatches(account, selectedAccountProvider)).slice(0, 1)
     : sortedAccounts
       .filter((account) => account.meters.length > 0 || account.status === "error");
-  const isSingleAccount = visibleAccounts.length === 1;
+  // 凭据池里被禁用的 key 没有快照（core 只刷新启用项）；在 cards 视图补灰卡，保证可再次点击启用
+  const disabledAccounts = variant === "cards"
+    ? disabledCredentialAccounts(providers ?? [], t).filter((account) =>
+        !selectedAccountProvider || providerAccountSelectionMatches(account, selectedAccountProvider)
+      )
+    : [];
+  const visibleAccounts = [...snapshotAccounts, ...disabledAccounts];
+  // 仅当快照侧恰好一个账户时才走单账户大面板，避免吞掉禁用灰卡
+  const isSingleAccount = visibleAccounts.length === 1 && snapshotAccounts.length === 1;
   const showHeading = dimensions.height >= 2 && dimensions.width >= 2;
 
   return (
@@ -2383,13 +2414,62 @@ function ProviderAccountsOverview({
             data-provider-account-grid="true"
           >
             {visibleAccounts.map((account) => {
-              return <ProviderAccountSummaryCard account={account} dimensions={dimensions} key={providerAccountSnapshotKey(account)} refreshing={refreshing} variant={variant} onRefresh={onRefresh} />;
+              const toggleState = providerCredentialToggleState(providers ?? [], account, onToggleProviderCredential);
+              return <ProviderAccountSummaryCard account={account} credentialEnabled={toggleState.enabled} dimensions={dimensions} key={providerAccountSnapshotKey(account)} onRefresh={onRefresh} onToggleCredential={toggleState.toggle} refreshing={refreshing} variant={variant} />;
             })}
           </div>
         )}
       </CardContent>
     </Card>
   );
+}
+
+// 凭据池 key 的点击切换状态：快照带 credentialId 且能找到配置时才可点击；enabled 决定是否变灰
+function providerCredentialToggleState(
+  providers: GatewayProviderConfig[],
+  account: ProviderAccountSnapshot,
+  onToggle: ((providerName: string, credentialId: string) => void | Promise<void>) | undefined
+): { enabled: boolean; toggle: (() => void) | undefined } {
+  if (!account.credentialId || !onToggle) {
+    return { enabled: true, toggle: undefined };
+  }
+  for (const provider of providers) {
+    if (provider.name.trim() !== account.provider.trim()) {
+      continue;
+    }
+    for (const [index, credential] of (provider.credentials ?? []).entries()) {
+      if (providerCredentialUiRuntimeId(provider, credential, index) === account.credentialId) {
+        return {
+          enabled: credential.enabled !== false,
+          toggle: () => void onToggle(provider.name.trim(), account.credentialId!)
+        };
+      }
+    }
+  }
+  return { enabled: true, toggle: undefined };
+}
+
+// 配置里被禁用的凭据池 key：core 不再为其刷新账户快照，这里补一张灰卡便于再次点击启用
+function disabledCredentialAccounts(providers: GatewayProviderConfig[], t: (value: string) => string): ProviderAccountSnapshot[] {
+  const cards: ProviderAccountSnapshot[] = [];
+  for (const provider of providers) {
+    for (const [index, credential] of (provider.credentials ?? []).entries()) {
+      if (credential.enabled !== false || !providerCredentialUiApiKey(credential)) {
+        continue;
+      }
+      cards.push({
+        credentialId: providerCredentialUiRuntimeId(provider, credential, index),
+        credentialLabel: credential.name?.trim() || credential.label?.trim() || credential.id?.trim(),
+        message: t("Credential disabled"),
+        meters: [],
+        provider: provider.name.trim(),
+        source: "merged",
+        status: "ok",
+        updatedAt: ""
+      });
+    }
+  }
+  return cards;
 }
 
 // 定时重渲染：让重置倒计时（formatProviderAccountReset 内部用 Date.now()）每分钟自动刷新，无需手动刷新账户
@@ -2452,14 +2532,18 @@ function ProviderAccountSinglePanel({
 
 function ProviderAccountSummaryCard({
   account,
+  credentialEnabled,
   dimensions,
   onRefresh,
+  onToggleCredential,
   refreshing = false,
   variant
 }: {
   account: ProviderAccountSnapshot;
+  credentialEnabled?: boolean;
   dimensions: OverviewWidgetDimensions;
   onRefresh?: () => void | Promise<void>;
+  onToggleCredential?: () => void | Promise<void>;
   refreshing?: boolean;
   variant: OverviewAccountVariant;
 }) {
@@ -2469,9 +2553,34 @@ function ProviderAccountSummaryCard({
   const balanceMeter = primaryProviderAccountBalanceMeter(account);
   const meters = providerAccountMetersForDisplayOrdered(account, providerAccountMeterLimit(dimensions, false, variant));
   const showQuotaVisual = providerAccountUsesQuotaVisual(variant) && quotaMeters.length > 0;
+  // 凭据池 key 可点击切换启用/禁用；禁用后整体变暗
+  const toggleable = Boolean(onToggleCredential);
+  const disabled = credentialEnabled === false;
 
   return (
-    <div className={cn("overview-nested-surface h-fit min-w-0 self-start overflow-hidden border", providerAccountCardPaddingClass(dimensions))}>
+    <div
+      aria-pressed={toggleable ? disabled : undefined}
+      className={cn(
+        "overview-nested-surface h-fit min-w-0 self-start overflow-hidden border",
+        providerAccountCardPaddingClass(dimensions),
+        disabled && "opacity-60",
+        toggleable && "cursor-pointer transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/25 hover:opacity-90",
+        toggleable && disabled && "hover:opacity-80"
+      )}
+      onClick={toggleable ? (event) => {
+        event.stopPropagation();
+        void onToggleCredential?.();
+      } : undefined}
+      onKeyDown={toggleable ? (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          void onToggleCredential?.();
+        }
+      } : undefined}
+      role={toggleable ? "button" : undefined}
+      tabIndex={toggleable ? 0 : undefined}
+      title={toggleable ? t("Click to enable or disable this key") : undefined}
+    >
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-[13px] font-semibold">{providerAccountSnapshotLabel(account)}</div>

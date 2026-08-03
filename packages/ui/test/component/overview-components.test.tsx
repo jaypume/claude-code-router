@@ -344,3 +344,72 @@ test("Codex reset cards format the credit id and expiry like card data", () => {
   assert.equal(formatCodexResetCardExpiry("2026-08-02T00:00:00Z"), "08/02");
   assert.equal(formatCodexResetCardExpiry("not-a-date"), "--/--");
 });
+
+test("credential pool account cards toggle enabled state on click", () => {
+  const poolProviders = [
+    {
+      api_base_url: "https://api.example.com/v1",
+      credentials: [
+        { enabled: true, id: "key-a", name: "Primary Key", api_key: "sk-a" },
+        { enabled: false, id: "key-b", name: "Backup Key", api_key: "sk-b" }
+      ],
+      name: "openai"
+    }
+  ];
+  const snapshots = [
+    {
+      credentialId: "key-a",
+      credentialLabel: "Primary Key",
+      meters: [
+        { id: "quota", kind: "quota", label: "5h quota", remaining: 80, unit: "%", window: "5h" }
+      ],
+      provider: "openai",
+      source: "http-json" as const,
+      status: "ok" as const,
+      updatedAt: new Date().toISOString()
+    }
+  ];
+  let toggled = "";
+  const html = renderToStaticMarkup(
+    <OverviewView
+      onToggleProviderCredential={(providerName, credentialId) => { toggled = `${providerName}:${credentialId}`; }}
+      onWidgetsChange={() => undefined}
+      overviewWidgets={[{ enabled: true, id: "account", size: "4:2", type: "account-balance", variant: "cards" }]}
+      providerAccounts={snapshots}
+      providers={poolProviders}
+      refreshProviderAccounts={() => undefined}
+      setUsageRange={() => undefined}
+      usageRange="7d"
+      usageStats={usageStats("7d")}
+    />
+  );
+
+  // 启用中的池 key 卡片可点击（role=button 且未按下）
+  assert.match(html, /overview-nested-surface[^>]*role="button"/);
+  assert.match(html, /aria-pressed="false"/);
+  assert.match(html, /openai \/ Primary Key/);
+  // 禁用的 key 补灰卡：aria-pressed=true + 禁用文案
+  assert.match(html, /aria-pressed="true"/);
+  assert.match(html, /openai \/ Backup Key/);
+  assert.match(html, /Credential disabled/);
+  assert.equal(toggled, "");
+});
+
+test("non-credential-pool account cards are not clickable", () => {
+  const html = renderToStaticMarkup(
+    <OverviewView
+      onToggleProviderCredential={(providerName, credentialId) => { void providerName; void credentialId; }}
+      onWidgetsChange={() => undefined}
+      overviewWidgets={[{ enabled: true, id: "account", size: "4:2", type: "account-balance", variant: "cards" }]}
+      providerAccounts={accountSnapshots()}
+      providers={[]}
+      refreshProviderAccounts={() => undefined}
+      setUsageRange={() => undefined}
+      usageRange="7d"
+      usageStats={usageStats("7d")}
+    />
+  );
+
+  assert.doesNotMatch(html, /overview-nested-surface[^>]*role="button"/);
+  assert.doesNotMatch(html, /overview-nested-surface[^>]*aria-pressed/);
+});

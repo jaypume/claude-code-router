@@ -21,6 +21,7 @@ import {
   normalizeProfileItem, normalizeProviderBaseUrl, normalizeRouterFallbackConfig, normalizeThemePreference, normalizeToolHubConfig, normalizeTrayBalanceProgressConfig, normalizeTrayIconPreference,
   normalizeTrayWidgets, normalizeTrayWindowModules, normalizeVirtualModelDraftPatch, OnboardingReadinessOptions, OnboardingStepId, onboardingStepOrder,
   OverviewWidgetConfig, parseProviderAccountDraft, pluginConfigPatchFromSettingsDraft,
+  providerCredentialUiRuntimeId,
   providerCredentialsFromDraft,
   persistLanguagePreference, PluginInstallCandidate, PluginMarketplaceEntry, PluginRoutingConfigTarget, PluginSettingsDraft, presetCapabilitiesFromDraft,
   probeProviderCandidates, probeProviderDeepLinkPayload, profileAgentLabel, profileAgentOptionsForRuntime, profileDraftWithDetectedAppPath, profileEnvRowsForAgent, ProfileConfig, ProfileOpenSurface, ProfileRuntimeStatus, profileConfigFromDraft, providerAccountApiKeySafetyIssue,
@@ -535,6 +536,34 @@ function App() {
       setProviderAccountSnapshots([]);
     } finally {
       setProviderAccountRefreshing(false);
+    }
+  }
+
+  // 凭据池：点击账户卡片快速启用/禁用对应 key，保存后立即刷新账户快照
+  async function toggleProviderCredential(providerName: string, credentialId: string): Promise<void> {
+    let changed = false;
+    const nextProviders = draftConfig.Providers.map((provider) => {
+      if (provider.name.trim() !== providerName) {
+        return provider;
+      }
+      const credentials = provider.credentials ?? [];
+      const nextCredentials = credentials.map((credential, index) => {
+        if (providerCredentialUiRuntimeId(provider, credential, index) !== credentialId) {
+          return credential;
+        }
+        changed = true;
+        return { ...credential, enabled: credential.enabled === false };
+      });
+      return nextCredentials === credentials ? provider : { ...provider, credentials: nextCredentials };
+    });
+    if (!changed) {
+      return;
+    }
+    const next = { ...draftConfig, Providers: nextProviders };
+    setConfigDraft(next);
+    const saved = await persistConfig(next, () => undefined);
+    if (saved) {
+      void refreshProviderAccountsNow();
     }
   }
 
@@ -3038,8 +3067,10 @@ function App() {
                   },
                   onWidgetsChange: changeOverviewWidgets,
                   overviewWidgets: normalizeOverviewWidgets(draftConfig.overviewWidgets),
+                  onToggleProviderCredential: (providerName, credentialId) => void toggleProviderCredential(providerName, credentialId),
                   providerAccounts: providerAccountSnapshots,
                   providerAccountRefreshing,
+                  providers: draftConfig.Providers,
                   refreshProviderAccounts: () => void refreshProviderAccountsNow(),
                   setUsageRange,
                   usageRange,

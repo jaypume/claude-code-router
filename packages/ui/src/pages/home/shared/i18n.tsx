@@ -979,6 +979,8 @@ export const appCopy: Record<ResolvedLanguage, AppCopy> = {
       "Clear filters or broaden the search to find more request logs.": "请清空筛选或放宽搜索条件来查找更多请求日志。",
       "Create integration": "创建集成",
       "Credential": "凭据",
+      "Credential disabled": "凭据已禁用",
+      "Click to enable or disable this key": "点击启用或禁用该 Key",
       "Credential method": "凭据方式",
       "Credential chain": "凭据链",
       "Credential pool": "凭据池",
