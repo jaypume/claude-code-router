@@ -545,6 +545,22 @@ function App() {
     }
   }
 
+  // 凭据池：只刷新指定 key 的账户快照，其余卡片数据保持不变
+  async function refreshProviderCredential(providerName: string, credentialId: string): Promise<void> {
+    if (!window.ccr) {
+      return;
+    }
+    try {
+      const snapshots = await window.ccr.getProviderAccountSnapshots(providerName, { credentialId, forceRefresh: true });
+      setProviderAccountSnapshots((current) => {
+        const rest = current.filter((snapshot) => !(snapshot.provider === providerName && snapshot.credentialId === credentialId));
+        return [...rest, ...snapshots];
+      });
+    } catch {
+      // 刷新失败时保留现有数据
+    }
+  }
+
   // 凭据池卡片切换启用/禁用时置位，让 Providers 变化不触发账户快照刷新
   const skipNextProviderAccountRefresh = useRef(false);
 
@@ -3077,6 +3093,7 @@ function App() {
                   },
                   onWidgetsChange: changeOverviewWidgets,
                   overviewWidgets: normalizeOverviewWidgets(draftConfig.overviewWidgets),
+                  onRefreshProviderCredential: (providerName, credentialId) => void refreshProviderCredential(providerName, credentialId),
                   onToggleProviderCredential: (providerName, credentialId) => void toggleProviderCredential(providerName, credentialId),
                   providerAccounts: providerAccountSnapshots,
                   providerAccountRefreshing,

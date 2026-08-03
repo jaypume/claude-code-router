@@ -439,3 +439,61 @@ function jwt(payload) {
 function base64url(value) {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
+
+test("getProviderAccountSnapshots refreshes only the requested credential", async (t) => {
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push(String(input));
+    void init;
+    return new Response(JSON.stringify({ data: { remaining: 42 } }));
+  };
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+
+  const { saveAppConfig, loadAppConfig } = await import("@ccr/core/config/config.ts");
+  const { getProviderAccountSnapshots } = await import("@ccr/core/providers/account-service.ts");
+  const current = await loadAppConfig();
+  const provider = {
+    account: {
+      connectors: [
+        {
+          auth: "provider-api-key",
+          endpoint: "https://api.example.com/v1/usage",
+          mapping: {
+            meters: [
+              {
+                id: "quota",
+                kind: "quota",
+                label: "5h quota",
+                remaining: "$.data.remaining",
+                unit: "%",
+                window: "5h"
+              }
+            ]
+          },
+          type: "http-json"
+        }
+      ],
+      enabled: true
+    },
+    api_base_url: "https://api.example.com/v1",
+    credentials: [
+      { api_key: "sk-a", name: "key-a" },
+      { api_key: "sk-b", name: "key-b" }
+    ],
+    enabled: true,
+    name: "credential-filter-test",
+    protocols: ["openai_chat_completions"]
+  };
+  await saveAppConfig({ ...current, Providers: [provider] });
+
+  const snapshots = await getProviderAccountSnapshots("credential-filter-test", {
+    credentialId: "key-a-1",
+    forceRefresh: true
+  });
+  assert.equal(snapshots.length, 1);
+  assert.equal(snapshots[0].credentialId, "key-a-1");
+  assert.equal(calls.length, 1);
+});

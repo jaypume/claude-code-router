@@ -16,6 +16,10 @@ import {
   zcodeDefaultBaseUrl
 } from "@ccr/core/agents/local-providers/service";
 import { grokAccessTokenExpired } from "@ccr/core/agents/local-providers/grok";
+import {
+  openCodeGoAuthCookiePlaceholder,
+  openCodeGoWorkspacePlaceholder
+} from "@ccr/core/agents/local-providers/opencode";
 import { pluginService } from "@ccr/core/plugins/service";
 import { getUsageTotalsSince } from "@ccr/core/usage/store";
 import { findProviderPresetByBaseUrl, providerEndpointCanReceiveProviderApiKey } from "@ccr/core/providers/presets/index";
@@ -130,6 +134,12 @@ export async function getProviderAccountSnapshots(
   const snapshots = await Promise.all(
     providers.flatMap((provider) => {
       const targets = providerAccountTargets(provider);
+      if (options.credentialId) {
+        // 按凭据刷新：只处理匹配的 target，不匹配时返回空（不回退 provider 不可用快照）
+        return targets
+          .filter((target) => target.credential && providerCredentialRuntimeId(target.provider, target.credential) === options.credentialId)
+          .map((target) => resolveProviderAccountSnapshot(config, target, options));
+      }
       if (targets.length > 0) {
         return targets.map((target) => resolveProviderAccountSnapshot(config, target, options));
       }
@@ -174,6 +184,16 @@ export async function testProviderAccountConnector(request: ProviderAccountTestR
     method: request.connector.method ?? "GET",
     type: "http-json"
   };
+  if (connector.parser === "opencode-go-usage") {
+    const payload = await fetchOpenCodeGoUsageText(connector.endpoint, provider, connector.headers, connector.method, connector.body);
+    const meters = opencodeGoUsageMeters(payload);
+    return {
+      meters,
+      message: meters.length === 0 ? "No OpenCode Go usage data available." : undefined,
+      payload,
+      status: meters.length > 0 ? statusFromMeters(meters, [], 1) : "error"
+    };
+  }
   const payload = await fetchJson(connector.endpoint, provider, connector.auth, connector.headers, connector.method, connector.body);
   if (connector.parser === "grok-subscription") {
     const meters = grokSubscriptionMeters(payload);
@@ -669,6 +689,17 @@ async function resolveHttpJsonConnector(
   const request = providerAccountConnectorUsesProviderApiKey(connector)
     ? await materializeProviderAccountRequest(config, provider)
     : { provider };
+  if (connector.parser === "opencode-go-usage") {
+    const payload = await fetchOpenCodeGoUsageText(connector.endpoint, request.provider, connector.headers, connector.method, connector.body);
+    const meters = opencodeGoUsageMeters(payload);
+    return {
+      errors: [],
+      message: meters.length === 0 ? "No OpenCode Go usage data available." : undefined,
+      meters,
+      source: "http-json",
+      status: meters.length > 0 ? statusFromMeters(meters, [], 1) : "error"
+    };
+  }
   const payload = await fetchJson(connector.endpoint, request.provider, connector.auth, {
     ...(connector.headers ?? {}),
     ...(request.headers ?? {})
