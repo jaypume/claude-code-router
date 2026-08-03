@@ -367,6 +367,17 @@ test("credential pool account cards toggle enabled state on click", () => {
       source: "http-json" as const,
       status: "ok" as const,
       updatedAt: new Date().toISOString()
+    },
+    {
+      credentialId: "key-b",
+      credentialLabel: "Backup Key",
+      meters: [
+        { id: "quota", kind: "quota", label: "5h quota", remaining: 40, unit: "%", window: "5h" }
+      ],
+      provider: "openai",
+      source: "http-json" as const,
+      status: "ok" as const,
+      updatedAt: new Date().toISOString()
     }
   ];
   let toggled = "";
@@ -384,14 +395,18 @@ test("credential pool account cards toggle enabled state on click", () => {
     />
   );
 
-  // 启用中的池 key 卡片可点击（role=button 且未按下）
-  assert.match(html, /overview-nested-surface[^>]*role="button"/);
-  assert.match(html, /aria-pressed="false"/);
+  // 启用中的池 key 卡片右上角有切换按钮（禁用文案 + 未按下），数据照常展示
+  assert.match(html, /aria-label="Disable this key openai \/ Primary Key"/);
   assert.match(html, /openai \/ Primary Key/);
-  // 禁用的 key 补灰卡：aria-pressed=true + 禁用文案
+  assert.match(html, /80%/);
+  // 禁用的 key 快照仍展示用量，但卡片变灰（opacity-60）+ 切换按钮为启用文案 + aria-pressed=true
+  assert.match(html, /aria-label="Enable this key openai \/ Backup Key"/);
   assert.match(html, /aria-pressed="true"/);
   assert.match(html, /openai \/ Backup Key/);
-  assert.match(html, /Credential disabled/);
+  assert.match(html, /40%/);
+  assert.match(html, /opacity-60/);
+  // 顺序稳定：Primary Key 在 Backup Key 之前（配置顺序）
+  assert.ok(html.indexOf("Primary Key") < html.indexOf("Backup Key"));
   assert.equal(toggled, "");
 });
 
@@ -410,6 +425,6 @@ test("non-credential-pool account cards are not clickable", () => {
     />
   );
 
-  assert.doesNotMatch(html, /overview-nested-surface[^>]*role="button"/);
-  assert.doesNotMatch(html, /overview-nested-surface[^>]*aria-pressed/);
+  assert.doesNotMatch(html, /aria-label="(Enable|Disable) this key/);
+  assert.doesNotMatch(html, /Credential disabled/);
 });

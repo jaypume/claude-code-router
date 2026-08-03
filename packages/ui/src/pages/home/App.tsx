@@ -504,6 +504,12 @@ function App() {
       return;
     }
 
+    // 凭据池切换只改 enabled，不影响余额数据，跳过本次账户刷新（含 30s 轮询重启）
+    if (skipNextProviderAccountRefresh.current) {
+      skipNextProviderAccountRefresh.current = false;
+      return;
+    }
+
     let cancelled = false;
     const refreshProviderAccounts = () => {
       void loadProviderAccountSnapshots()
@@ -539,6 +545,9 @@ function App() {
     }
   }
 
+  // 凭据池卡片切换启用/禁用时置位，让 Providers 变化不触发账户快照刷新
+  const skipNextProviderAccountRefresh = useRef(false);
+
   // 凭据池：点击账户卡片快速启用/禁用对应 key，保存后立即刷新账户快照
   async function toggleProviderCredential(providerName: string, credentialId: string): Promise<void> {
     let changed = false;
@@ -560,11 +569,12 @@ function App() {
       return;
     }
     const next = { ...draftConfig, Providers: nextProviders };
+    // 数据不变（enabled 不影响余额），跳过 Providers 变化触发的账户刷新与轮询重启
+    skipNextProviderAccountRefresh.current = true;
     setConfigDraft(next);
-    const saved = await persistConfig(next, () => undefined);
-    if (saved) {
-      void refreshProviderAccountsNow();
-    }
+    // 不强制刷新账户快照：enabled 不影响余额数据（core 对禁用 key 也保留快照），
+    // 卡片变灰由配置乐观驱动；避免所有卡片的刷新按钮在切换时一起转圈。
+    await persistConfig(next, () => undefined);
   }
 
   const requestLogsEnabled = Boolean(draftConfig.observability.requestLogs);

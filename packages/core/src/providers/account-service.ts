@@ -561,8 +561,9 @@ function effectiveProviderAccountConfig(
 }
 
 function activeProviderCredentials(provider: GatewayProviderConfig): ProviderCredentialConfig[] {
+  // 注意：不过滤 enabled——禁用只是 gateway 路由不选它，账户余额快照仍要生成，
+  // 否则 UI 上禁用的 key 会丢失用量数据。启用/禁用状态由 UI 从配置读取并变灰。
   return (provider.credentials ?? []).filter((credential) =>
-    credential.enabled !== false &&
     Boolean(providerCredentialApiKey(credential))
   );
 }

@@ -15,7 +15,7 @@ import {
   OverviewWidgetType, OverviewWidgetVariant, Pencil, Pie, PieChart, Plus,
   PointerSensor, primaryProviderAccountMeter, providerAccountMeterDetailValidityProgress, providerAccountMeterProgress, providerAccountMetersForDisplay, providerAccountProgressClass, isGatewayProviderEnabled, isProviderAccountManualResetMeter,
   providerAccountSnapshotKey, providerAccountSnapshotLabel,
-  providerCredentialUiApiKey, providerCredentialUiRuntimeId,
+  providerCredentialUiRuntimeId,
   ProviderAccountMeter, ProviderAccountSnapshot, ReactNode, ReactPointerEvent, rectSortingStrategy, RefreshCw, Select,
   SelectControl, SortableContext, sortableKeyboardCoordinates, systemStatusPointTooltip,
   Tooltip, translateOptions, Trash2, UsageComparisonRow, usageRangeOptions,
@@ -27,7 +27,7 @@ import { buildTokenActivity, type TokenActivityCell } from "@/lib/usage-activity
 import { ShareCardWidget } from "./share-cards";
 import {
   CalendarDays, ChartNoAxesCombined, ChartPie, CreditCard, GripHorizontal, Inbox, Layers3,
-  Rocket, Server, UsersRound, WalletCards, Wifi
+  Power, Rocket, Server, UsersRound, WalletCards, Wifi
 } from "lucide-react";
 import { Tooltip as UiTooltip, TooltipPortal } from "@/components/ui/tooltip";
 
@@ -2332,14 +2332,25 @@ function ProviderAccountsOverview({
     ? sortedAccounts.filter((account) => providerAccountSelectionMatches(account, selectedAccountProvider)).slice(0, 1)
     : sortedAccounts
       .filter((account) => account.meters.length > 0 || account.status === "error");
-  // 凭据池里被禁用的 key 没有快照（core 只刷新启用项）；在 cards 视图补灰卡，保证可再次点击启用
-  const disabledAccounts = variant === "cards"
-    ? disabledCredentialAccounts(providers ?? [], t).filter((account) =>
-        !selectedAccountProvider || providerAccountSelectionMatches(account, selectedAccountProvider)
-      )
-    : [];
-  const visibleAccounts = [...snapshotAccounts, ...disabledAccounts];
-  // 仅当快照侧恰好一个账户时才走单账户大面板，避免吞掉禁用灰卡
+  // 凭据池卡片按配置里 credentials 的顺序稳定排列，启用/禁用不改变卡片顺序
+  const credentialOrder = new Map<string, number>();
+  for (const provider of providers ?? []) {
+    for (const [index, credential] of (provider.credentials ?? []).entries()) {
+      credentialOrder.set(`${provider.name.trim()}::${providerCredentialUiRuntimeId(provider, credential, index)}`, index);
+    }
+  }
+  const visibleAccounts = [...snapshotAccounts].sort((left, right) => {
+    if (!left.credentialId || !right.credentialId) {
+      return 0;
+    }
+    const leftIndex = credentialOrder.get(`${left.provider}::${left.credentialId}`);
+    const rightIndex = credentialOrder.get(`${right.provider}::${right.credentialId}`);
+    if (leftIndex === undefined || rightIndex === undefined) {
+      return 0;
+    }
+    return leftIndex - rightIndex;
+  });
+  // 仅当快照侧恰好一个账户时才走单账户大面板
   const isSingleAccount = visibleAccounts.length === 1 && snapshotAccounts.length === 1;
   const showHeading = dimensions.height >= 2 && dimensions.width >= 2;
 
@@ -2449,29 +2460,6 @@ function providerCredentialToggleState(
   return { enabled: true, toggle: undefined };
 }
 
-// 配置里被禁用的凭据池 key：core 不再为其刷新账户快照，这里补一张灰卡便于再次点击启用
-function disabledCredentialAccounts(providers: GatewayProviderConfig[], t: (value: string) => string): ProviderAccountSnapshot[] {
-  const cards: ProviderAccountSnapshot[] = [];
-  for (const provider of providers) {
-    for (const [index, credential] of (provider.credentials ?? []).entries()) {
-      if (credential.enabled !== false || !providerCredentialUiApiKey(credential)) {
-        continue;
-      }
-      cards.push({
-        credentialId: providerCredentialUiRuntimeId(provider, credential, index),
-        credentialLabel: credential.name?.trim() || credential.label?.trim() || credential.id?.trim(),
-        message: t("Credential disabled"),
-        meters: [],
-        provider: provider.name.trim(),
-        source: "merged",
-        status: "ok",
-        updatedAt: ""
-      });
-    }
-  }
-  return cards;
-}
-
 // 定时重渲染：让重置倒计时（formatProviderAccountReset 内部用 Date.now()）每分钟自动刷新，无需手动刷新账户
 function useRerenderEvery(intervalMs: number) {
   const [, setTick] = useState(0);
@@ -2553,40 +2541,27 @@ function ProviderAccountSummaryCard({
   const balanceMeter = primaryProviderAccountBalanceMeter(account);
   const meters = providerAccountMetersForDisplayOrdered(account, providerAccountMeterLimit(dimensions, false, variant));
   const showQuotaVisual = providerAccountUsesQuotaVisual(variant) && quotaMeters.length > 0;
-  // 凭据池 key 可点击切换启用/禁用；禁用后整体变暗
+  // 凭据池 key 通过右上角按钮切换启用/禁用（避免整卡点击被卡片内交互误触）；禁用后整体变暗
   const toggleable = Boolean(onToggleCredential);
   const disabled = credentialEnabled === false;
 
   return (
     <div
-      aria-pressed={toggleable ? disabled : undefined}
       className={cn(
         "overview-nested-surface h-fit min-w-0 self-start overflow-hidden border",
         providerAccountCardPaddingClass(dimensions),
-        disabled && "opacity-60",
-        toggleable && "cursor-pointer transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/25 hover:opacity-90",
-        toggleable && disabled && "hover:opacity-80"
+        disabled && "opacity-60"
       )}
-      onClick={toggleable ? (event) => {
-        event.stopPropagation();
-        void onToggleCredential?.();
-      } : undefined}
-      onKeyDown={toggleable ? (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          void onToggleCredential?.();
-        }
-      } : undefined}
-      role={toggleable ? "button" : undefined}
-      tabIndex={toggleable ? 0 : undefined}
-      title={toggleable ? t("Click to enable or disable this key") : undefined}
     >
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-[13px] font-semibold">{providerAccountSnapshotLabel(account)}</div>
           {providerAccountShowRefreshTime(dimensions) ? <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{formatProviderAccountRefreshTime(account, t)}</div> : null}
         </div>
-        {providerAccountShowRefresh(dimensions) ? <ProviderAccountRefreshButton account={account} refreshing={refreshing} onRefresh={onRefresh} /> : null}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {toggleable ? <ProviderCredentialToggleButton disabled={disabled} label={providerAccountSnapshotLabel(account)} onToggle={onToggleCredential} /> : null}
+          {providerAccountShowRefresh(dimensions) ? <ProviderAccountRefreshButton account={account} refreshing={refreshing} onRefresh={onRefresh} /> : null}
+        </div>
       </div>
       {showQuotaVisual ? (
         <div className="mt-1.5 min-h-0 overflow-hidden">
@@ -2612,8 +2587,35 @@ function ProviderAccountSummaryCard({
   );
 }
 
-function ProviderAccountRefreshButton({
-  account,
+function ProviderCredentialToggleButton({
+  disabled,
+  label,
+  onToggle
+}: {
+  disabled: boolean;
+  label: string;
+  onToggle?: () => void | Promise<void>;
+}) {
+  const t = useAppText();
+  const labelText = disabled ? t("Enable this key") : t("Disable this key");
+  return (
+    <button
+      aria-label={`${labelText} ${label}`}
+      aria-pressed={disabled}
+      className="m-0 inline-flex shrink-0 appearance-none items-center justify-center border-0 bg-transparent p-0 text-muted-foreground shadow-none transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/25"
+      title={labelText}
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        void onToggle?.();
+      }}
+    >
+      <Power className={cn("h-3.5 w-3.5", disabled && "opacity-55")} />
+    </button>
+  );
+}
+
+function ProviderAccountRefreshButton({  account,
   onRefresh,
   refreshing = false
 }: {
