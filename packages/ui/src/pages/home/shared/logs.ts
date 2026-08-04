@@ -2,9 +2,6 @@ import type {
   RequestLogBody,
   RequestLogEntry
 } from "@ccr/core/contracts/app";
-import {
-  formatCompactNumber
-} from "./usage";
 
 import { isPlainRecord, stringValue } from "./common";
 
@@ -27,7 +24,12 @@ export function formatLogDateTime(value: string): string {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} ${offset}`;
 }
 
-export function formatLogTokenSummary(entry: RequestLogEntry, t: (value: string) => string, locale?: Intl.LocalesArgument): string {
+// 固定格式：emoji 后固定 4 字符，按数值大小决定是否展示小数点：
+//   1.1K（1 位整数带 1 位小数）|  22K（2 位整数）|333K（3 位整数）|  111（无单位整数）
+// 补全用 U+2007 figure space：普通空格会被 HTML 折叠，破坏对齐。
+const FIGURE_SPACE = "\u2007";
+
+export function formatLogTokenSummary(entry: RequestLogEntry): string {
   if (
     entry.totalTokens === 0 &&
     entry.inputTokens === 0 &&
@@ -39,21 +41,112 @@ export function formatLogTokenSummary(entry: RequestLogEntry, t: (value: string)
     return "-";
   }
   const values = [
-    `${formatCompactNumber(entry.inputTokens, locale)} ${t("入")}`,
-    `${formatCompactNumber(entry.outputTokens, locale)} ${t("出")}`
+    `🔼${FIGURE_SPACE}${formatTokenAmount(entry.inputTokens)}`,
+    `🔽${FIGURE_SPACE}${formatTokenAmount(entry.outputTokens)}`
   ];
 
   if (entry.cacheReadTokens > 0) {
-    values.push(`${formatCompactNumber(entry.cacheReadTokens, locale)} ${t("Cache")}`);
+    values.push(`⚡️${FIGURE_SPACE}${formatTokenAmount(entry.cacheReadTokens)}`);
   }
   if (entry.cacheWriteTokens > 0) {
-    values.push(`${formatCompactNumber(entry.cacheWriteTokens, locale)} ${t("Cache write")}`);
+    values.push(`⚡️${FIGURE_SPACE}${formatTokenAmount(entry.cacheWriteTokens)}`);
   }
   if (entry.reasoningTokens > 0) {
-    values.push(`${formatCompactNumber(entry.reasoningTokens, locale)} ${t("Thinking")}`);
+    values.push(`🧠${FIGURE_SPACE}${formatTokenAmount(entry.reasoningTokens)}`);
   }
 
-  return values.join("  ");
+  return values.join(`${FIGURE_SPACE}${FIGURE_SPACE}`);
+}
+
+// 4 字符对齐：<10 的千/百万值带一位小数，>=10 不带小数，<1000 纯整数。
+export function formatTokenAmount(value: number): string {
+  if (value < 1000) {
+    return String(Math.round(value)).padStart(4, FIGURE_SPACE);
+  }
+  const unit = value >= 1_000_000 ? "M" : "K";
+  const scaled = value / (unit === "M" ? 1_000_000 : 1_000);
+  if (scaled >= 10) {
+    const roundedInt = Math.round(scaled);
+    if (roundedInt >= 1000) {
+      if (unit === "M") {
+        // 10 亿级以上：整数 M，防止进位后再进位（现实中 token 量不会到这一档）
+        return `${String(roundedInt).padStart(4, FIGURE_SPACE)}M`;
+      }
+      // 999.5K 进位 → 升为 M 再格式化
+      return formatTokenAmount(roundedInt * 1_000);
+    }
+    return `${String(roundedInt).padStart(3, FIGURE_SPACE)}${unit}`;
+  }
+  const rounded = Math.round(scaled * 10) / 10;
+  if (rounded >= 10) {
+    // 9.96K 一位小数进位到 10K
+    return `${String(10).padStart(3, FIGURE_SPACE)}${unit}`;
+  }
+  const whole = Math.floor(rounded);
+  const fraction = Math.round((rounded - whole) * 10);
+  return `${whole}.${fraction}${unit}`;
+}
+
+export type LogSelectionTotals = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheTokens: number;
+  thinkingTokens: number;
+  costUsd: number;
+};
+
+// 多选汇总：把多条请求日志的 token 分项与成本求和。
+export function summarizeLogSelections(rows: readonly RequestLogEntry[]): LogSelectionTotals {
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheTokens = 0;
+  let thinkingTokens = 0;
+  let costUsd = 0;
+  for (const row of rows) {
+    inputTokens += row.inputTokens;
+    outputTokens += row.outputTokens;
+    cacheTokens += row.cacheReadTokens + row.cacheWriteTokens;
+    thinkingTokens += row.reasoningTokens;
+    costUsd += row.costUsd ?? 0;
+  }
+  return { inputTokens, outputTokens, cacheTokens, thinkingTokens, costUsd };
+}
+
+export type LogSelectionMode = "single" | "toggle" | "range";
+
+// 选择策略：single 替换为单行；toggle 增删单行（Ctrl/Cmd+单击）；range 从锚点到当前行连续多选（Shift+单击）。
+// 返回新的选择集与新锚点（range 模式锚点保持不变）。
+export function applyLogSelection(
+  current: ReadonlySet<number>,
+  rows: readonly RequestLogEntry[],
+  anchorId: number | undefined,
+  clickedId: number,
+  mode: LogSelectionMode
+): { next: Set<number>; anchor: number | undefined } {
+  if (mode === "single") {
+    return { next: new Set([clickedId]), anchor: clickedId };
+  }
+  if (mode === "toggle") {
+    const next = new Set(current);
+    if (next.has(clickedId)) {
+      next.delete(clickedId);
+    } else {
+      next.add(clickedId);
+    }
+    return { next, anchor: clickedId };
+  }
+  const anchorIndex = anchorId === undefined ? -1 : rows.findIndex((row) => row.id === anchorId);
+  const clickedIndex = rows.findIndex((row) => row.id === clickedId);
+  if (anchorIndex < 0 || clickedIndex < 0) {
+    // 无锚点或目标行不在当前页：退化为单选
+    return { next: new Set([clickedId]), anchor: clickedId };
+  }
+  const next = new Set(current);
+  const [start, end] = anchorIndex <= clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex];
+  for (let i = start; i <= end; i++) {
+    next.add(rows[i].id);
+  }
+  return { next, anchor: anchorId };
 }
 
 export function logRequestModel(entry: RequestLogEntry): string {

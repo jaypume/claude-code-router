@@ -113,6 +113,89 @@ test("LogsView keeps Chinese token column copy as Token", () => {
   assert.doesNotMatch(html, /令牌/);
 });
 
+test("LogsView header cells carry a column id and context menu hook for column visibility", () => {
+  const html = renderToStaticMarkup(
+    <AppI18nContext.Provider value={appCopy.en}>
+      <LogsView
+        error=""
+        filter={{ page: 1, pageSize: 25, status: "all" }}
+        loading={false}
+        page={{ ...emptyLogPage, items: [sampleRequestLogEntry], total: 1 }}
+        refreshLogs={() => undefined}
+        updateFilter={() => undefined}
+      />
+    </AppI18nContext.Provider>
+  );
+
+  // Every visible header cell exposes its column id via data attribute and an oncontextmenu handler.
+  assert.match(html, /data-ccr-log-column="time"/);
+  assert.match(html, /data-ccr-log-column="status"/);
+  assert.match(html, /data-ccr-log-column="model"/);
+  assert.match(html, /data-ccr-log-column="client"/);
+  assert.match(html, /data-ccr-log-column="provider"/);
+  assert.match(html, /data-ccr-log-column="tokens"/);
+  assert.match(html, /data-ccr-log-column="cost"/);
+  assert.match(html, /data-ccr-log-column="duration"/);
+  // The header grid derives its column template from createLogTableGridStyle (no hardcoded grid-cols-* class).
+  assert.doesNotMatch(html, /network-table-header[^>]*grid-cols-\[/);
+  // Hidden columns shrink the grid; the remaining columns keep fixed pixel widths instead of stretching to fill.
+  assert.match(html, /grid-template-columns:230px 130px 108px 180px 160px 170px 200px 110px 110px/);
+  // Row cells render client, provider, and cost data in the new columns.
+  assert.match(html, />claude-code</);
+  assert.match(html, />anthropic</);
+  assert.match(html, /\$0\.01/);
+});
+
+test("LogsView hidden columns keep row cells aligned with the header grid", () => {
+  // Preset hidden columns in localStorage so the header drops Stream and Credential tracks.
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      addEventListener: () => undefined,
+      innerHeight: 800,
+      innerWidth: 1200,
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => void storage.set(key, value)
+      },
+      removeEventListener: () => undefined
+    }
+  });
+  storage.set("ccr.logs.hiddenColumns", JSON.stringify(["stream", "credential"]));
+  try {
+    const html = renderToStaticMarkup(
+      <AppI18nContext.Provider value={appCopy.en}>
+        <LogsView
+          error=""
+          filter={{ page: 1, pageSize: 25, status: "all" }}
+          loading={false}
+          page={{ ...emptyLogPage, items: [sampleRequestLogEntry], total: 1 }}
+          refreshLogs={() => undefined}
+          updateFilter={() => undefined}
+        />
+      </AppI18nContext.Provider>
+    );
+
+    // Header exposes exactly the 8 remaining columns, and the grid keeps their fixed pixel widths.
+    assert.equal((html.match(/data-ccr-log-column=/g) ?? []).length, 8);
+    assert.match(html, /grid-template-columns:230px 130px 180px 160px 170px 200px 110px 110px/);
+    assert.doesNotMatch(html, /data-ccr-log-column="stream"/);
+    assert.doesNotMatch(html, /data-ccr-log-column="credential"/);
+    // Row cells render in visible-column order: client before provider before cost.
+    // Limit to the desktop grid row; the mobile card renders its own copy of these values.
+    const rowStart = html.indexOf("network-row grid");
+    const rowHtml = html.slice(rowStart);
+    const clientIndex = rowHtml.indexOf(">claude-code<");
+    const providerIndex = rowHtml.indexOf(">anthropic<");
+    const costIndex = rowHtml.indexOf("$0.01");
+    assert.ok(rowStart >= 0 && clientIndex >= 0 && providerIndex > clientIndex && costIndex > providerIndex);
+  } finally {
+    Object.defineProperty(globalThis, "window", { configurable: true, value: originalWindow });
+  }
+});
+
 test("AgentAnalysisView keeps session headings horizontal and shows cache rate and cost", () => {
   const session: AgentAnalysisSessionRow = {
     agent: "claude-code",

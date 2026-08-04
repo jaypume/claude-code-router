@@ -1218,6 +1218,12 @@
     background: var(--network-row-selected);
   }
 
+  .network-row-checked,
+  .network-row-checked:hover {
+    background: var(--network-row-selected);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--primary) 40%, transparent);
+  }
+
   .network-row-id,
   .network-row-secondary {
     color: var(--network-text-muted);

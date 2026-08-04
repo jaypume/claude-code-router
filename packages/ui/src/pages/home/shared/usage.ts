@@ -150,14 +150,13 @@ export function formatUsdCost(value: number | undefined): string {
     return "$0.00";
   }
   if (normalized < 0.01) {
-    return `$${normalized.toFixed(6)}`;
+    return `$${normalized.toFixed(4)}`;
   }
-  return new Intl.NumberFormat(undefined, {
-    currency: "USD",
-    maximumFractionDigits: normalized >= 100 ? 0 : 2,
-    minimumFractionDigits: normalized >= 100 ? 0 : 2,
-    style: "currency"
-  }).format(normalized);
+  const fractionDigits = normalized >= 100 ? 0 : 2;
+  return `$${normalized.toLocaleString("en-US", {
+    maximumFractionDigits: fractionDigits,
+    minimumFractionDigits: fractionDigits
+  })}`;
 }
 
 export function formatAxisNumber(value: number): string {

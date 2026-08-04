@@ -1,14 +1,16 @@
+import * as React from "react";
 import { memo } from "react";
-import { Maximize2, Route, X } from "lucide-react";
+import { Eye, EyeOff, Maximize2, Route, X } from "lucide-react";
 import type { RequestRouteTrace, RequestRouteTraceChange, RequestRouteTraceHop } from "@ccr/core/contracts/app";
 import {
   AnimatedIconSwap, Check, ChevronDown, ChevronLeft,
   ChevronRight, clampNumber, clientInitial, cn, Copy, copyTextToClipboard,
   Database, Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle, filterLogText, formatBytes, formatCompactNumber, formatDuration,
-  formatLogBodyView, formatLogDateTime, formatLogTokenSummary, formatNetworkRequestRaw, formatNetworkResponseRaw, formatRouteTracePath, formatUsdCost,
+  formatLogBodyView, formatLogDateTime, formatLogTokenSummary, formatNetworkRequestRaw, formatNetworkResponseRaw, formatRouteTracePath, formatTokenAmount, formatUsdCost,
   isJsonContainer, jsonChildPath, logRequestModel,
   logResolvedRouteModel, logSelectOptions, motion, MoveRight, Network, networkCodeLabel,
-  networkExchangeMatchesQuery, networkHeaderRows, networkLifecycleLabel, networkQueryRows, networkRowId, networkSummaryRows,
+  networkExchangeMatchesQuery, networkHeaderRows, networkLifecycleLabel, networkQueryRows, networkRowId, networkSummaryRows, applyLogSelection, summarizeLogSelections,
+  LogSelectionMode,
   Pause, Play, ProxyNetworkBody, ProxyNetworkExchange, ProxyNetworkSnapshot, ProxyStatus,
   ReactNode, ReactPointerEvent, RefreshCw, RequestLogBody, RequestLogEntry, RequestLogListFilter,
   RequestLogPage, requestLogPageSizeOptions, RequestLogStatusFilter, requestLogStatusOptions, Search, Select,
@@ -24,10 +26,11 @@ const logJsonAutoExpandEntryLimit = 60;
 const logJsonContainerPreviewLimit = 80;
 const logJsonAutoExpandTextLimit = 160 * 1024;
 const logBodyViewCache = new Map<string, ReturnType<typeof formatLogBodyView>>();
-type LogTableColumnId = "time" | "status" | "stream" | "model" | "credential" | "tokens" | "duration";
+type LogTableColumnId = "time" | "status" | "stream" | "model" | "client" | "provider" | "credential" | "tokens" | "cost" | "duration";
 type LogTableColumn = {
   id: LogTableColumnId;
   minWidth: number;
+  defaultWidth: number;
 };
 type LogTableColumnWidths = Partial<Record<LogTableColumnId, number>>;
 type LogTableGridStyle = {
@@ -36,14 +39,17 @@ type LogTableGridStyle = {
 };
 
 const baseLogTableColumns: LogTableColumn[] = [
-  { id: "time", minWidth: 150 },
-  { id: "status", minWidth: 116 },
-  { id: "stream", minWidth: 108 },
-  { id: "model", minWidth: 180 },
-  { id: "tokens", minWidth: 140 },
-  { id: "duration", minWidth: 92 }
+  { id: "time", minWidth: 160, defaultWidth: 230 },
+  { id: "status", minWidth: 116, defaultWidth: 130 },
+  { id: "stream", minWidth: 108, defaultWidth: 108 },
+  { id: "model", minWidth: 180, defaultWidth: 180 },
+  { id: "client", minWidth: 140, defaultWidth: 160 },
+  { id: "provider", minWidth: 150, defaultWidth: 170 },
+  { id: "tokens", minWidth: 140, defaultWidth: 200 },
+  { id: "cost", minWidth: 100, defaultWidth: 110 },
+  { id: "duration", minWidth: 92, defaultWidth: 110 }
 ];
-const credentialLogTableColumn: LogTableColumn = { id: "credential", minWidth: 128 };
+const credentialLogTableColumn: LogTableColumn = { id: "credential", minWidth: 128, defaultWidth: 140 };
 
 export function NetworkingView({
   clearCaptures,
@@ -375,21 +381,143 @@ export function LogsView({
   const [detailById, setDetailById] = useState<Record<number, RequestLogEntry>>({});
   const [detailErrorById, setDetailErrorById] = useState<Record<number, string>>({});
   const [detailLoadingId, setDetailLoadingId] = useState<number>();
-  const [logColumnWidths, setLogColumnWidths] = useState<LogTableColumnWidths>({});
+  const [logColumnWidths, setLogColumnWidths] = useState<LogTableColumnWidths>(() => loadLogColumnWidths());
+  const [hiddenLogColumnIds, setHiddenLogColumnIds] = useState<Set<LogTableColumnId>>(() => loadHiddenLogColumnIds());
+  const [columnMenu, setColumnMenu] = useState<{ anchor: { x: number; y: number }; columnId: LogTableColumnId } | undefined>();
+  const [selectedLogIds, setSelectedLogIds] = useState<ReadonlySet<number>>(new Set());
+  const [selectionAnchorId, setSelectionAnchorId] = useState<number>();
+  const [selectionSummaryMenu, setSelectionSummaryMenu] = useState<{
+    anchor: { x: number; y: number };
+    rows: RequestLogEntry[];
+  } | undefined>();
   const logTableHeaderRef = useRef<HTMLDivElement>(null);
+  const columnMenuRef = useRef<HTMLDivElement | null>(null);
+  const selectionMenuRef = useRef<HTMLDivElement | null>(null);
   const firstItem = page.total === 0 ? 0 : (page.page - 1) * page.pageSize + 1;
   const lastItem = Math.min(page.total, page.page * page.pageSize);
   const hasAnyCredentialInfo = Boolean(filter.credential) ||
     page.options.credentials.length > 0 ||
     page.items.some(logHasCredentialInfo);
-  const visibleLogColumns = useMemo(() => getLogTableColumns(hasAnyCredentialInfo), [hasAnyCredentialInfo]);
-  const logTableGridClass = hasAnyCredentialInfo
-    ? "grid-cols-[minmax(0,0.8fr)_minmax(92px,0.38fr)_minmax(98px,0.4fr)_minmax(0,0.78fr)_minmax(120px,0.42fr)_minmax(0,0.68fr)_82px]"
-    : "grid-cols-[minmax(0,0.8fr)_minmax(92px,0.38fr)_minmax(98px,0.4fr)_minmax(0,0.9fr)_minmax(0,0.74fr)_82px]";
+  const allLogColumns = useMemo(
+    () => getLogTableColumns(hasAnyCredentialInfo, new Set()),
+    [hasAnyCredentialInfo]
+  );
+  const visibleLogColumns = useMemo(
+    () => getLogTableColumns(hasAnyCredentialInfo, hiddenLogColumnIds),
+    [hasAnyCredentialInfo, hiddenLogColumnIds]
+  );
+  const visibleLogColumnIds = useMemo(
+    () => visibleLogColumns.map((column) => column.id),
+    [visibleLogColumns]
+  );
   const logTableGridStyle = useMemo(
     () => createLogTableGridStyle(visibleLogColumns, logColumnWidths),
     [logColumnWidths, visibleLogColumns]
   );
+
+  useEffect(() => {
+    saveHiddenLogColumnIds(hiddenLogColumnIds);
+  }, [hiddenLogColumnIds]);
+
+  useEffect(() => {
+    saveLogColumnWidths(logColumnWidths);
+  }, [logColumnWidths]);
+
+  useEffect(() => {
+    if (!columnMenu) {
+      return;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (columnMenuRef.current && target && columnMenuRef.current.contains(target)) {
+        return;
+      }
+      setColumnMenu(undefined);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setColumnMenu(undefined);
+      }
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [columnMenu]);
+
+  useEffect(() => {
+    if (!selectionSummaryMenu) {
+      return;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (selectionMenuRef.current && target && selectionMenuRef.current.contains(target)) {
+        return;
+      }
+      setSelectionSummaryMenu(undefined);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSelectionSummaryMenu(undefined);
+      }
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [selectionSummaryMenu]);
+
+  // 单击选中：普通单击单选；Ctrl/Cmd+单击切换单行；Shift+单击从锚点连续多选。双击展开/收起。
+  const handleLogRowSelect = useCallback((id: number, event: React.MouseEvent) => {
+    const mode: LogSelectionMode = event.shiftKey
+      ? "range"
+      : (event.ctrlKey || event.metaKey)
+        ? "toggle"
+        : "single";
+    const result = applyLogSelection(selectedLogIds, page.items, selectionAnchorId, id, mode);
+    setSelectedLogIds(result.next);
+    setSelectionAnchorId(result.anchor);
+  }, [page.items, selectedLogIds, selectionAnchorId]);
+
+  // 右键选中行：未选中的行先单选它，再弹出选中行汇总（总 Token / 总成本）。
+  const handleLogRowContextMenu = useCallback((id: number, event: React.MouseEvent) => {
+    event.preventDefault();
+    const selected = selectedLogIds.has(id) ? selectedLogIds : new Set([id]);
+    if (!selectedLogIds.has(id)) {
+      setSelectedLogIds(selected);
+      setSelectionAnchorId(id);
+    }
+    const rows = page.items.filter((item) => selected.has(item.id));
+    setSelectionSummaryMenu({ anchor: { x: event.clientX, y: event.clientY }, rows });
+  }, [page.items, selectedLogIds]);
+
+  const toggleLogColumnVisibility = useCallback((columnId: LogTableColumnId) => {
+    setHiddenLogColumnIds((current) => {
+      const next = new Set(current);
+      if (next.has(columnId)) {
+        if (next.size >= allLogColumns.length - 1) {
+          return current;
+        }
+        next.delete(columnId);
+      } else {
+        next.add(columnId);
+      }
+      return next;
+    });
+  }, [allLogColumns.length]);
+
+  const handleLogHeaderContextMenu = useCallback((columnId: LogTableColumnId, event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setColumnMenu({ anchor: { x: event.clientX, y: event.clientY }, columnId });
+  }, []);
+
+  const showAllLogColumns = useCallback(() => {
+    setHiddenLogColumnIds(new Set());
+  }, []);
   const hasActiveFilters = logFilterHasActiveValues(filter);
   const loadLogDetail = useCallback((id: number) => {
     if (detailById[id] || detailLoadingId === id || !window.ccr?.getRequestLogDetail) {
@@ -458,8 +586,12 @@ export function LogsView({
     const startX = event.clientX;
     const startLeftWidth = measuredWidths[leftColumn.id] ?? leftColumn.minWidth;
     const startRightWidth = measuredWidths[rightColumn.id] ?? rightColumn.minWidth;
+    // 左列可缩小到 minWidth；右列可压缩总量 = 右侧所有列超出各自 minWidth 的部分之和，
+    // 这样拖宽左列时可以把余量分摊到右侧多列，而不被紧邻一列的下限卡死。
     const minDelta = leftColumn.minWidth - startLeftWidth;
-    const maxDelta = startRightWidth - rightColumn.minWidth;
+    const maxDelta = visibleLogColumns.slice(columnIndex + 1).reduce((total, column) => {
+      return total + (measuredWidths[column.id] ?? column.defaultWidth) - column.minWidth;
+    }, 0);
     const previousCursor = document.body.style.cursor;
     const previousUserSelect = document.body.style.userSelect;
     document.body.style.cursor = "col-resize";
@@ -467,12 +599,25 @@ export function LogsView({
 
     const update = (pointerEvent: PointerEvent) => {
       const delta = clampNumber(pointerEvent.clientX - startX, minDelta, maxDelta);
-      setLogColumnWidths((current) => ({
-        ...current,
-        ...measuredWidths,
-        [leftColumn.id]: Math.round(startLeftWidth + delta),
-        [rightColumn.id]: Math.round(startRightWidth - delta)
-      }));
+      setLogColumnWidths((current) => {
+        const next: LogTableColumnWidths = { ...current, ...measuredWidths };
+        next[leftColumn.id] = Math.round(startLeftWidth + delta);
+        if (delta >= 0) {
+          // 左列变宽：从紧邻列开始依次压缩右侧各列，把 delta 分摊完
+          let remaining = delta;
+          for (let i = columnIndex + 1; i < visibleLogColumns.length && remaining > 0; i++) {
+            const column = visibleLogColumns[i];
+            const base = next[column.id] ?? column.defaultWidth;
+            const take = Math.min(remaining, base - column.minWidth);
+            next[column.id] = Math.round(base - take);
+            remaining -= take;
+          }
+        } else {
+          // 左列变窄：紧邻右列吸收全部增量（原行为）
+          next[rightColumn.id] = Math.round(startRightWidth - delta);
+        }
+        return next;
+      });
     };
     const stop = () => {
       document.body.style.cursor = previousCursor;
@@ -599,14 +744,16 @@ export function LogsView({
           <div className="network-table-scroll min-h-0 flex-1 overflow-auto">
             <div className="w-full min-w-0">
               <div
-                className={cn("network-table-header sticky top-0 z-10 grid h-9 items-center border-b text-[12px] font-semibold max-[720px]:hidden", logTableGridClass)}
+                className="network-table-header sticky top-0 z-10 grid h-9 items-center border-b text-[12px] font-semibold max-[720px]:hidden"
                 ref={logTableHeaderRef}
                 style={logTableGridStyle}
               >
                 {visibleLogColumns.map((column, index) => (
                   <NetworkHeaderCell
+                    columnId={column.id}
                     key={column.id}
                     label={logTableColumnLabel(column.id, t)}
+                    onContextMenu={(event) => handleLogHeaderContextMenu(column.id, event)}
                     onResizeStart={index < visibleLogColumns.length - 1 ? (event) => startLogColumnResize(index, event) : undefined}
                     resizeLabel={t("Resize column width")}
                   />
@@ -658,13 +805,15 @@ export function LogsView({
                         detailError={detailErrorById[item.id]}
                         detailLoading={detailLoadingId === item.id}
                         expanded={expandedId === item.id}
-                        hasCredentialInfo={hasAnyCredentialInfo}
                         index={index}
                         item={expandedId === item.id ? detailById[item.id] ?? item : item}
                         key={item.id}
-                        logTableGridClass={logTableGridClass}
                         logTableGridStyle={logTableGridStyle}
+                        onContextMenuStats={handleLogRowContextMenu}
+                        onSelect={handleLogRowSelect}
                         onToggle={toggleExpandedLog}
+                        selected={selectedLogIds.has(item.id)}
+                        visibleColumnIds={visibleLogColumnIds}
                       />
                     ))}
                   </div>
@@ -674,6 +823,23 @@ export function LogsView({
           </div>
         </div>
       </div>
+      {columnMenu ? (
+        <LogColumnVisibilityMenu
+          allColumns={allLogColumns}
+          anchor={columnMenu.anchor}
+          hiddenIds={hiddenLogColumnIds}
+          onShowAll={showAllLogColumns}
+          onToggle={toggleLogColumnVisibility}
+          menuRef={columnMenuRef}
+        />
+      ) : null}
+      {selectionSummaryMenu ? (
+        <LogSelectionSummaryMenu
+          anchor={selectionSummaryMenu.anchor}
+          menuRef={selectionMenuRef}
+          rows={selectionSummaryMenu.rows}
+        />
+      ) : null}
     </motion.div>
   );
 }
@@ -743,29 +909,109 @@ function clearRequestLogFilters(): RequestLogListFilter {
   };
 }
 
-function getLogTableColumns(hasCredentialColumn: boolean): LogTableColumn[] {
-  if (!hasCredentialColumn) {
-    return baseLogTableColumns;
+// 完整列清单（含可选的 credential 列）：用于 localStorage 校验与宽度下限检查。
+const ALL_LOG_TABLE_COLUMNS: readonly LogTableColumn[] = [...baseLogTableColumns, credentialLogTableColumn];
+const LOG_TABLE_ALL_COLUMN_IDS: readonly LogTableColumnId[] = ALL_LOG_TABLE_COLUMNS.map((column) => column.id);
+const LOG_TABLE_COLUMN_MIN_WIDTHS: Record<LogTableColumnId, number> = Object.fromEntries(
+  ALL_LOG_TABLE_COLUMNS.map((column) => [column.id, column.minWidth])
+) as Record<LogTableColumnId, number>;
+const LOG_TABLE_STORAGE_KEY = "ccr.logs.hiddenColumns";
+
+function loadHiddenLogColumnIds(): Set<LogTableColumnId> {
+  if (typeof window === "undefined") {
+    return new Set();
   }
-  return [
-    ...baseLogTableColumns.slice(0, 4),
-    credentialLogTableColumn,
-    ...baseLogTableColumns.slice(4)
-  ];
+  try {
+    const raw = window.localStorage.getItem(LOG_TABLE_STORAGE_KEY);
+    if (!raw) {
+      return new Set();
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return new Set();
+    }
+    return new Set(
+      parsed.filter(
+        (value): value is LogTableColumnId => typeof value === "string" && LOG_TABLE_ALL_COLUMN_IDS.includes(value as LogTableColumnId)
+      )
+    );
+  } catch {
+    return new Set();
+  }
 }
 
-function createLogTableGridStyle(columns: LogTableColumn[], widths: LogTableColumnWidths): LogTableGridStyle | undefined {
-  const columnWidths = columns.map((column) => widths[column.id]);
-  if (columnWidths.some((width) => typeof width !== "number")) {
-    return undefined;
+function saveHiddenLogColumnIds(hiddenIds: Set<LogTableColumnId>): void {
+  if (typeof window === "undefined") {
+    return;
   }
+  try {
+    window.localStorage.setItem(LOG_TABLE_STORAGE_KEY, JSON.stringify(Array.from(hiddenIds)));
+  } catch {
+    // ignore quota or serialization errors
+  }
+}
 
+const LOG_TABLE_WIDTHS_STORAGE_KEY = "ccr.logs.columnWidths";
+
+function loadLogColumnWidths(): LogTableColumnWidths {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const raw = window.localStorage.getItem(LOG_TABLE_WIDTHS_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return {};
+    }
+    const widths: LogTableColumnWidths = {};
+    for (const [columnId, value] of Object.entries(parsed)) {
+      const minWidth = LOG_TABLE_COLUMN_MIN_WIDTHS[columnId as LogTableColumnId];
+      // 丢弃未知列与 <= minWidth 的值：<= minWidth 是旧版“默认宽=下限”时代的死锁产物，
+      // 保留会让该列回到默认宽时依然拖不动。
+      if (minWidth !== undefined && typeof value === "number" && Number.isFinite(value) && value > minWidth) {
+        widths[columnId as LogTableColumnId] = value;
+      }
+    }
+    return widths;
+  } catch {
+    return {};
+  }
+}
+
+function saveLogColumnWidths(widths: LogTableColumnWidths): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(LOG_TABLE_WIDTHS_STORAGE_KEY, JSON.stringify(widths));
+  } catch {
+    // ignore quota or serialization errors
+  }
+}
+
+function getLogTableColumns(hasCredentialColumn: boolean, hiddenIds: ReadonlySet<LogTableColumnId>): LogTableColumn[] {
+  const source: LogTableColumn[] = !hasCredentialColumn
+    ? baseLogTableColumns
+    : [
+        ...baseLogTableColumns.slice(0, 6),
+        credentialLogTableColumn,
+        ...baseLogTableColumns.slice(6)
+      ];
+  return source.filter((column) => !hiddenIds.has(column.id));
+}
+
+function createLogTableGridStyle(columns: LogTableColumn[], widths: LogTableColumnWidths): LogTableGridStyle {
+  const resolvedWidths = columns.map((column) => {
+    const width = widths[column.id] ?? column.defaultWidth;
+    return typeof width === "number" ? Math.max(column.minWidth, Math.round(width)) : column.defaultWidth;
+  });
   return {
-    gridTemplateColumns: columns.map((column, index) => {
-      const width = Math.max(column.minWidth, Math.round(columnWidths[index] ?? column.minWidth));
-      return `minmax(${column.minWidth}px, ${width}fr)`;
-    }).join(" "),
-    minWidth: `${columns.reduce((total, column) => total + column.minWidth, 0)}px`
+    // 固定像素列宽：列被隐藏后剩余列不再拉伸占满，右侧留白；总宽超出容器时由外层横向滚动。
+    gridTemplateColumns: resolvedWidths.map((width) => `${width}px`).join(" "),
+    minWidth: `${resolvedWidths.reduce((total, width) => total + width, 0)}px`
   };
 }
 
@@ -779,10 +1025,16 @@ function logTableColumnLabel(columnId: LogTableColumnId, t: (value: string) => s
       return t("Stream");
     case "model":
       return t("模型");
+    case "client":
+      return t("Client");
+    case "provider":
+      return t("Provider");
     case "credential":
       return t("Credential");
     case "tokens":
       return t("Token");
+    case "cost":
+      return t("Cost");
     case "duration":
       return t("持续时间");
   }
@@ -806,9 +1058,8 @@ function LogMobileCard({
   onToggle: (id: number) => void;
 }) {
   const t = useAppText();
-  const numberLocale = useAppNumberLocale();
   const createdAt = useMemo(() => formatLogDateTime(item.createdAt), [item.createdAt]);
-  const tokenSummary = useMemo(() => formatLogTokenSummary(item, t, numberLocale), [item, numberLocale, t]);
+  const tokenSummary = useMemo(() => formatLogTokenSummary(item), [item]);
 
   return (
     <div className={cn("network-row rounded-md border text-[12px]", expanded && "network-row-selected")}>
@@ -875,63 +1126,88 @@ const LogRow = memo(function LogRow({
   detailError,
   detailLoading,
   expanded,
-  hasCredentialInfo,
   index,
   item,
-  logTableGridClass,
   logTableGridStyle,
-  onToggle
+  onContextMenuStats,
+  onSelect,
+  onToggle,
+  selected,
+  visibleColumnIds
 }: {
   detailError?: string;
   detailLoading?: boolean;
   expanded: boolean;
-  hasCredentialInfo: boolean;
   index: number;
   item: RequestLogEntry;
-  logTableGridClass: string;
-  logTableGridStyle?: LogTableGridStyle;
+  logTableGridStyle: LogTableGridStyle;
+  onContextMenuStats: (id: number, event: React.MouseEvent) => void;
+  onSelect: (id: number, event: React.MouseEvent) => void;
   onToggle: (id: number) => void;
+  selected: boolean;
+  visibleColumnIds: readonly LogTableColumnId[];
 }) {
   const t = useAppText();
-  const numberLocale = useAppNumberLocale();
   const createdAt = useMemo(() => formatLogDateTime(item.createdAt), [item.createdAt]);
-  const tokenSummary = useMemo(() => formatLogTokenSummary(item, t, numberLocale), [item, numberLocale, t]);
+  const tokenSummary = useMemo(() => formatLogTokenSummary(item), [item]);
+
+  const renderCell = (columnId: LogTableColumnId): ReactNode => {
+    switch (columnId) {
+      case "time":
+        return <div className="truncate px-3 font-mono text-[11px]" title={createdAt}>{createdAt}</div>;
+      case "status":
+        return (
+          <div className="flex min-w-0 items-center gap-2 px-2">
+            <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 transition-transform", expanded && "rotate-180")} />
+            <LogStatusDot entry={item} />
+            <span className="network-row-secondary truncate">{item.statusCode || "-"}</span>
+            {item.retryAttempts.length > 0 ? (
+              <span
+                className="network-service-paused shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold"
+                title={`${t("Retry attempts")}: ${item.retryAttempts.length}`}
+              >
+                R{item.retryAttempts.length}
+              </span>
+            ) : null}
+          </div>
+        );
+      case "stream":
+        return <LogStreamCell entry={item} />;
+      case "model":
+        return <LogModelRouteCell entry={item} />;
+      case "client":
+        return <LogClientCell entry={item} />;
+      case "provider":
+        return <LogProviderCell entry={item} />;
+      case "credential":
+        return <LogCredentialCell entry={item} />;
+      case "tokens":
+        return <div className="network-row-secondary truncate px-2 font-mono text-[11px]" title={tokenSummary}>{tokenSummary}</div>;
+      case "cost":
+        return <LogCostCell entry={item} />;
+      case "duration":
+        return <div className="network-row-secondary truncate px-2">{formatDuration(item.durationMs)}</div>;
+    }
+  };
 
   return (
     <div>
       <button
         aria-expanded={expanded}
+        aria-selected={selected}
         className={cn(
-          "network-row grid h-10 w-full items-center border-0 px-0 text-left text-[12px] font-semibold outline-none transition-colors",
-          logTableGridClass,
+          "network-row grid h-10 w-full select-none items-center border-0 px-0 text-left text-[12px] font-semibold outline-none transition-colors",
           index % 2 === 0 ? "network-row-even" : "network-row-odd",
-          expanded && "network-row-selected"
+          expanded && "network-row-selected",
+          selected && "network-row-checked"
         )}
-        onClick={() => onToggle(item.id)}
+        onClick={(event) => onSelect(item.id, event)}
+        onContextMenu={(event) => onContextMenuStats(item.id, event)}
+        onDoubleClick={() => onToggle(item.id)}
         style={logTableGridStyle}
         type="button"
       >
-        <div className="truncate px-3 font-mono text-[11px]" title={createdAt}>
-          {createdAt}
-        </div>
-        <div className="flex min-w-0 items-center gap-2 px-2">
-          <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 transition-transform", expanded && "rotate-180")} />
-          <LogStatusDot entry={item} />
-          <span className="network-row-secondary truncate">{item.statusCode || "-"}</span>
-          {item.retryAttempts.length > 0 ? (
-            <span
-              className="network-service-paused shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold"
-              title={`${t("Retry attempts")}: ${item.retryAttempts.length}`}
-            >
-              R{item.retryAttempts.length}
-            </span>
-          ) : null}
-        </div>
-        <LogStreamCell entry={item} />
-        <LogModelRouteCell entry={item} />
-        {hasCredentialInfo ? <LogCredentialCell entry={item} /> : null}
-        <div className="network-row-secondary truncate px-2" title={tokenSummary}>{tokenSummary}</div>
-        <div className="network-row-secondary truncate px-2">{formatDuration(item.durationMs)}</div>
+        {visibleColumnIds.map((columnId) => renderCell(columnId))}
       </button>
       {expanded ? <LogExpandedDetails detailError={detailError} detailLoading={detailLoading} entry={item} /> : null}
     </div>
@@ -1459,6 +1735,27 @@ function LogModelTooltip({
         </TooltipPortal>
       ) : null}
     </>
+  );
+}
+
+function LogClientCell({ entry }: { entry: RequestLogEntry }) {
+  const label = entry.client || "-";
+  return (
+    <div className="network-row-secondary truncate px-2" title={label}>{label}</div>
+  );
+}
+
+function LogProviderCell({ entry }: { entry: RequestLogEntry }) {
+  const label = entry.provider || "-";
+  return (
+    <div className="network-row-secondary truncate px-2" title={label}>{label}</div>
+  );
+}
+
+function LogCostCell({ entry }: { entry: RequestLogEntry }) {
+  const label = formatUsdCost(entry.costUsd ?? 0);
+  return (
+    <div className="network-row-secondary truncate px-2 font-mono text-[11px]" title={label}>{label}</div>
   );
 }
 
@@ -2093,16 +2390,24 @@ function JsonPrimitiveValue({ value }: { value: unknown }) {
 }
 
 function NetworkHeaderCell({
+  columnId,
   label,
+  onContextMenu,
   onResizeStart,
   resizeLabel
 }: {
+  columnId?: string;
   label: string;
+  onContextMenu?: (event: React.MouseEvent<HTMLDivElement>) => void;
   onResizeStart?: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   resizeLabel?: string;
 }) {
   return (
-    <div className={cn("network-header-cell relative flex h-full min-w-0 items-center border-l px-2 first:border-l-0", onResizeStart && "pr-3")}>
+    <div
+      className={cn("network-header-cell relative flex h-full min-w-0 items-center border-l px-2 first:border-l-0", onResizeStart && "pr-3")}
+      data-ccr-log-column={columnId}
+      onContextMenu={onContextMenu}
+    >
       <span className="min-w-0 truncate">{label}</span>
       {onResizeStart ? (
         <button
@@ -2288,5 +2593,137 @@ function NetworkBodyViewer({ body }: { body?: ProxyNetworkBody }) {
 function NetworkInspectorCode({ value }: { value: string }) {
   return (
     <pre className="network-code min-h-[240px] overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-[11px] leading-5">{value}</pre>
+  );
+}
+
+function LogColumnVisibilityMenu({
+  allColumns,
+  anchor,
+  hiddenIds,
+  menuRef,
+  onShowAll,
+  onToggle
+}: {
+  allColumns: LogTableColumn[];
+  anchor: { x: number; y: number };
+  hiddenIds: ReadonlySet<LogTableColumnId>;
+  menuRef: React.MutableRefObject<HTMLDivElement | null>;
+  onShowAll: () => void;
+  onToggle: (columnId: LogTableColumnId) => void;
+}) {
+  const t = useAppText();
+  const composedRef = useCallback((node: HTMLDivElement | null) => {
+    menuRef.current = node;
+  }, [menuRef]);
+  const [menuWidth, setMenuWidth] = useState(208);
+  const [menuHeight, setMenuHeight] = useState(0);
+
+  useEffect(() => {
+    const node = menuRef.current;
+    if (!node) {
+      return;
+    }
+    setMenuWidth(node.offsetWidth);
+    setMenuHeight(node.getBoundingClientRect().height);
+  }, [allColumns.length, menuRef]);
+
+  const safeLeft = Math.max(8, Math.min(anchor.x, window.innerWidth - menuWidth - 8));
+  const maxTop = Math.max(8, window.innerHeight - menuHeight - 8);
+  const safeTop = Math.min(anchor.y, maxTop);
+
+  return (
+    <div
+      aria-label={t("Column visibility")}
+      className="fixed z-50 min-w-[200px] rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+      ref={composedRef}
+      role="menu"
+      style={{ left: safeLeft, top: safeTop }}
+    >
+      <div className="flex items-center justify-between px-2 py-1 text-[11px] font-semibold text-muted-foreground">
+        <span>{t("Columns")}</span>
+        <button
+          className="rounded px-1.5 py-0.5 text-[10px] font-semibold text-primary outline-none hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={hiddenIds.size === 0}
+          onClick={onShowAll}
+          type="button"
+        >
+          {t("Show all")}
+        </button>
+      </div>
+      <div className="my-1 h-px bg-border" />
+      {allColumns.map((column) => {
+        const hidden = hiddenIds.has(column.id);
+        const isLastVisible = !hidden && hiddenIds.size >= allColumns.length - 1;
+        return (
+          <button
+            aria-checked={!hidden}
+            className={cn(
+              "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/30",
+              isLastVisible && "cursor-not-allowed opacity-60"
+            )}
+            disabled={isLastVisible}
+            key={column.id}
+            onClick={() => onToggle(column.id)}
+            role="menuitemcheckbox"
+            type="button"
+          >
+            {hidden ? <EyeOff className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <Eye className="h-3.5 w-3.5 shrink-0 text-primary" />}
+            <span className="min-w-0 flex-1 truncate">{logTableColumnLabel(column.id, t)}</span>
+            <span aria-hidden="true" className={cn("h-3.5 w-3.5 shrink-0 rounded-sm border", !hidden ? "border-primary bg-primary" : "border-muted-foreground/40")} />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function LogSelectionSummaryMenu({
+  anchor,
+  menuRef,
+  rows
+}: {
+  anchor: { x: number; y: number };
+  menuRef: React.MutableRefObject<HTMLDivElement | null>;
+  rows: RequestLogEntry[];
+}) {
+  const t = useAppText();
+  const [menuWidth, setMenuWidth] = useState(200);
+  const [menuHeight, setMenuHeight] = useState(0);
+  const totals = useMemo(() => summarizeLogSelections(rows), [rows]);
+
+  useEffect(() => {
+    const node = menuRef.current;
+    if (!node) {
+      return;
+    }
+    setMenuWidth(node.offsetWidth);
+    setMenuHeight(node.getBoundingClientRect().height);
+  }, [menuRef, rows.length]);
+
+  const safeLeft = Math.max(8, Math.min(anchor.x, window.innerWidth - menuWidth - 8));
+  const maxTop = Math.max(8, window.innerHeight - menuHeight - 8);
+  const safeTop = Math.min(anchor.y, maxTop);
+  const figureSpace = "\u2007";
+
+  return (
+    <div
+      aria-label={t("Total")}
+      className="fixed z-50 min-w-[200px] rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+      ref={menuRef}
+      role="menu"
+      style={{ left: safeLeft, top: safeTop }}
+    >
+      <div className="px-2 py-1 text-[11px] font-semibold text-muted-foreground">
+        {t("Total")} {rows.length}
+      </div>
+      <div className="my-1 h-px bg-border" />
+      <div className="space-y-1 px-2 py-1 font-mono text-[12px]">
+        <div>🔼{figureSpace}{formatTokenAmount(totals.inputTokens)}</div>
+        <div>🔽{figureSpace}{formatTokenAmount(totals.outputTokens)}</div>
+        {totals.cacheTokens > 0 ? <div>⚡️{figureSpace}{formatTokenAmount(totals.cacheTokens)}</div> : null}
+        {totals.thinkingTokens > 0 ? <div>🧠{figureSpace}{formatTokenAmount(totals.thinkingTokens)}</div> : null}
+        <div className="pt-1">{formatUsdCost(totals.costUsd)}</div>
+      </div>
+    </div>
   );
 }
