@@ -2663,9 +2663,84 @@ function restoreDisabledGlobalProfile(
   return disabledRestoreStatus(profile.agent, file, disabledMessage, restoreResult, profile.name || profile.id || profile.agent);
 }
 
+// Claude Code 档案关闭时的恢复：
+// - 纯 managed 文件（只有 apiKeyHelper/env）→ 走 restoreGlobalConfigFile（快照恢复或删除）；
+// - 混合文件（含用户自定义字段）→ 只移除 CCR 管理的字段（managed env keys + apiKeyHelper），
+//   保留用户自己的顶层字段与 env，避免关闭档案后 CCR 写入的配置残留。
+function restoreDisabledClaudeCodeProfile(profile: ProfileConfig, file: string, disabledMessage: string): ProfileClientApplyStatus {
+  const profileName = profile.name || profile.id || profile.agent;
+  if (!isGlobalProfile(profile)) {
+    return disabledStatus(profile.agent, file, disabledMessage);
+  }
+
+  const current = existsSync(file) ? readFileSync(file, "utf8") : undefined;
+  if (current === undefined) {
+    return disabledRestoreStatus(profile.agent, file, disabledMessage, {
+      changed: false,
+      file,
+      missingBackup: false,
+      restored: true
+    }, profileName);
+  }
+
+  if (isManagedClaudeCodeSettingsContent(current)) {
+    const restoreResult = restoreGlobalConfigFile(file, { isManagedContent: isManagedClaudeCodeSettingsContent, mode: privateFileMode });
+    return disabledRestoreStatus(profile.agent, file, disabledMessage, restoreResult, profileName);
+  }
+
+  const settings = parseJsonContent(current);
+  if (!settings) {
+    // 无效 JSON：不触碰用户文件
+    return disabledRestoreStatus(profile.agent, file, disabledMessage, {
+      changed: false,
+      file,
+      missingBackup: false,
+      restored: false
+    }, profileName);
+  }
+
+  const next = removeManagedClaudeCodeSettingsFields(settings);
+  if (JSON.stringify(next) === JSON.stringify(settings)) {
+    return disabledRestoreStatus(profile.agent, file, disabledMessage, {
+      changed: false,
+      file,
+      missingBackup: false,
+      restored: true
+    }, profileName);
+  }
+  const writeResult = writeFileWithBackup(file, `${JSON.stringify(next, null, 2)}\n`, { mode: privateFileMode });
+  return disabledRestoreStatus(profile.agent, file, disabledMessage, {
+    ...writeResult,
+    file,
+    missingBackup: false,
+    restored: true
+  }, profileName);
+}
+
+// 移除 CCR 写入的字段：managed env keys（gateway endpoint、模型、profile env、MCP env、时区等）与 apiKeyHelper，
+// 其余顶层字段与用户自己的 env 全部保留。
+function removeManagedClaudeCodeSettingsFields(settings: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...settings };
+  delete next.apiKeyHelper;
+  if (isRecord(next.env)) {
+    const env = { ...next.env };
+    for (const key of Object.keys(env)) {
+      if (isManagedClaudeCodeSettingsEnvKey(key)) {
+        delete env[key];
+      }
+    }
+    if (Object.keys(env).length === 0) {
+      delete next.env;
+    } else {
+      next.env = env;
+    }
+  }
+  return next;
+}
+
 function disabledProfileStatus(profile: ProfileConfig): ProfileClientApplyStatus {
   if (profile.agent === "claude-code") {
-    return restoreDisabledGlobalProfile(profile, resolveClaudeCodeSettingsFile(profile), "Claude Code profile is disabled.", isManagedClaudeCodeSettingsContent);
+    return restoreDisabledClaudeCodeProfile(profile, resolveClaudeCodeSettingsFile(profile), "Claude Code profile is disabled.");
   }
   if (profile.agent === "zcode") {
     return restoreDisabledZcodeProfile(profile, resolveZcodeConfigFile(profile));

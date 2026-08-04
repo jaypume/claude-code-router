@@ -2935,21 +2935,27 @@ function App() {
   }
 
   function updateProfileItem(index: number, patch: Partial<ProfileConfig>) {
-    updateConfig((next) => {
-      const profiles = [...next.profile.profiles];
+    const next = buildConfigUpdate((config) => {
+      const profiles = [...config.profile.profiles];
       const current = profiles[index];
       if (!current) {
-        return next;
+        return config;
       }
       profiles[index] = normalizeProfileItem({ ...current, ...patch }, index);
       return {
-        ...next,
+        ...config,
         profile: {
-          ...next.profile,
+          ...config.profile,
+          // 用户开启任一档案 = 打开档案总开关：旧版遗留的顶层 enabled=false 会压过
+          // per-profile 开关（profileEntries 强制全部档案 disabled），开启时自动恢复。
+          enabled: config.profile.enabled === false && profiles.some((profile) => profile.enabled) ? true : config.profile.enabled,
           profiles: enforceSingleEnabledGlobalProfilePerAgent(profiles, index)
         }
       };
     });
+    setConfigDraft(next);
+    // 启停开关是即时生效操作：显式持久化并应用（写 ~/.claude/settings.json），不依赖 auto-save 兜底
+    void persistConfig(next, setProfileActionError);
   }
 
   function removeProfile(index: number) {
