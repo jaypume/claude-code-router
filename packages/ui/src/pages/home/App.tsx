@@ -261,6 +261,7 @@ function App() {
   const [usageStats, setUsageStats] = useState<UsageStatsSnapshot>(fallbackUsageStats);
   const [providerAccountSnapshots, setProviderAccountSnapshots] = useState<ProviderAccountSnapshot[]>([]);
   const [providerAccountRefreshing, setProviderAccountRefreshing] = useState(false);
+  const [refreshingAccountKey, setRefreshingAccountKey] = useState<string>();
   const updateActionBusyRef = useRef(false);
   const resolvedLanguage = languagePreference === "system" ? systemLanguage : languagePreference;
   const copy = appCopy[resolvedLanguage];
@@ -498,15 +499,29 @@ function App() {
     }
   }, [draftConfig.Providers, usageModelFilter, usageProviderFilter]);
 
+  // 账户快照只依赖 Providers 中影响余额的配置；credential.enabled 不影响余额，
+  // 剔除后 toggle 启用/禁用不再触发账户刷新（也不中断 30s 轮询）。
+  const providerAccountRefreshKey = useMemo(
+    () => JSON.stringify(
+      draftConfig.Providers.map((provider) => ({
+        ...provider,
+        credentials: (provider.credentials ?? []).map((credential) => {
+          const fingerprint: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries(credential)) {
+            if (key !== "enabled") {
+              fingerprint[key] = value;
+            }
+          }
+          return fingerprint;
+        })
+      }))
+    ),
+    [draftConfig.Providers]
+  );
+
   useEffect(() => {
     if (!window.ccr) {
       setProviderAccountSnapshots([]);
-      return;
-    }
-
-    // 凭据池切换只改 enabled，不影响余额数据，跳过本次账户刷新（含 30s 轮询重启）
-    if (skipNextProviderAccountRefresh.current) {
-      skipNextProviderAccountRefresh.current = false;
       return;
     }
 
@@ -529,7 +544,7 @@ function App() {
       cancelled = true;
       stopPolling();
     };
-  }, [draftConfig.Providers]);
+  }, [providerAccountRefreshKey]);
 
   async function refreshProviderAccountsNow() {
     if (providerAccountRefreshing) {
@@ -545,11 +560,17 @@ function App() {
     }
   }
 
-  // 凭据池：只刷新指定 key 的账户快照，其余卡片数据保持不变
-  async function refreshProviderCredential(providerName: string, credentialId: string): Promise<void> {
+  // 精确刷新单个账户：credentialId 存在时只刷新该凭据 key，否则刷新整个 provider 的账户；
+  // 其余卡片数据与转圈状态保持不变。
+  async function refreshProviderAccount(providerName: string, credentialId?: string): Promise<void> {
     if (!window.ccr) {
       return;
     }
+    const key = credentialId ? `${providerName}::${credentialId}` : providerName;
+    if (refreshingAccountKey === key) {
+      return;
+    }
+    setRefreshingAccountKey(key);
     try {
       const snapshots = await window.ccr.getProviderAccountSnapshots(providerName, { credentialId, forceRefresh: true });
       setProviderAccountSnapshots((current) => {
@@ -558,13 +579,13 @@ function App() {
       });
     } catch {
       // 刷新失败时保留现有数据
+    } finally {
+      setRefreshingAccountKey(undefined);
     }
   }
 
-  // 凭据池卡片切换启用/禁用时置位，让 Providers 变化不触发账户快照刷新
-  const skipNextProviderAccountRefresh = useRef(false);
-
-  // 凭据池：点击账户卡片快速启用/禁用对应 key，保存后立即刷新账户快照
+  // 凭据池：点击账户卡片快速启用/禁用对应 key。enabled 不影响余额快照，
+  // 配置指纹（剔除 enabled）保持不变，不会触发账户刷新与轮询重启。
   async function toggleProviderCredential(providerName: string, credentialId: string): Promise<void> {
     let changed = false;
     const nextProviders = draftConfig.Providers.map((provider) => {
@@ -585,8 +606,6 @@ function App() {
       return;
     }
     const next = { ...draftConfig, Providers: nextProviders };
-    // 数据不变（enabled 不影响余额），跳过 Providers 变化触发的账户刷新与轮询重启
-    skipNextProviderAccountRefresh.current = true;
     setConfigDraft(next);
     // 不强制刷新账户快照：enabled 不影响余额数据（core 对禁用 key 也保留快照），
     // 卡片变灰由配置乐观驱动；避免所有卡片的刷新按钮在切换时一起转圈。
@@ -3099,11 +3118,12 @@ function App() {
                   },
                   onWidgetsChange: changeOverviewWidgets,
                   overviewWidgets: normalizeOverviewWidgets(draftConfig.overviewWidgets),
-                  onRefreshProviderCredential: (providerName, credentialId) => void refreshProviderCredential(providerName, credentialId),
+                  onRefreshProviderAccount: (providerName, credentialId) => void refreshProviderAccount(providerName, credentialId),
                   onToggleProviderCredential: (providerName, credentialId) => void toggleProviderCredential(providerName, credentialId),
                   providerAccounts: providerAccountSnapshots,
                   providerAccountRefreshing,
                   providers: draftConfig.Providers,
+                  refreshingAccountKey,
                   refreshProviderAccounts: () => void refreshProviderAccountsNow(),
                   setUsageRange,
                   usageRange,

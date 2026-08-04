@@ -52,9 +52,10 @@ export function OverviewView({
   providerAccounts,
   providerAccountRefreshing = false,
   providers,
+  refreshingAccountKey,
   refreshProviderAccounts,
   setUsageRange,
-  onRefreshProviderCredential,
+  onRefreshProviderAccount,
   onToggleProviderCredential,
   usageFilters,
   usageRange,
@@ -66,8 +67,9 @@ export function OverviewView({
   providerAccountRefreshing?: boolean;
   providers?: GatewayProviderConfig[];
   refreshProviderAccounts?: () => void | Promise<void>;
+  refreshingAccountKey?: string;
   setUsageRange: (range: UsageStatsRange) => void;
-  onRefreshProviderCredential?: (providerName: string, credentialId: string) => void | Promise<void>;
+  onRefreshProviderAccount?: (providerName: string, credentialId?: string) => void | Promise<void>;
   onToggleProviderCredential?: (providerName: string, credentialId: string) => void | Promise<void>;
   usageFilters?: OverviewUsageFilters;
   usageRange: UsageStatsRange;
@@ -310,12 +312,13 @@ export function OverviewView({
                   onSelect={() => setSelectedWidgetId(widget.id)}
                 >
                   <OverviewWidgetRenderer
-                    onRefreshProviderCredential={onRefreshProviderCredential}
+                    onRefreshProviderAccount={onRefreshProviderAccount}
                     onToggleProviderCredential={onToggleProviderCredential}
                     providerAccounts={providerAccounts}
                     providerAccountRefreshing={providerAccountRefreshing}
                     providers={providers}
                     refreshProviderAccounts={refreshProviderAccounts}
+                    refreshingAccountKey={refreshingAccountKey}
                     usageRange={usageRange}
                     usageStats={usageStats}
                     widget={widget}
@@ -332,12 +335,13 @@ export function OverviewView({
       <DragOverlay adjustScale={false}>
         {activeWidget ? (
           <OverviewWidgetDragOverlay
-            onRefreshProviderCredential={onRefreshProviderCredential}
+            onRefreshProviderAccount={onRefreshProviderAccount}
             onToggleProviderCredential={onToggleProviderCredential}
             providerAccounts={providerAccounts}
             providerAccountRefreshing={providerAccountRefreshing}
             providers={providers}
             refreshProviderAccounts={refreshProviderAccounts}
+            refreshingAccountKey={refreshingAccountKey}
             usageRange={usageRange}
             usageStats={usageStats}
             widget={activeWidget}
@@ -766,22 +770,24 @@ function SortableOverviewWidget({
 }
 
 function OverviewWidgetDragOverlay({
-  onRefreshProviderCredential,
+  onRefreshProviderAccount,
   onToggleProviderCredential,
   providerAccounts,
   providerAccountRefreshing = false,
   providers,
   refreshProviderAccounts,
+  refreshingAccountKey,
   usageRange,
   usageStats,
   widget
 }: {
-  onRefreshProviderCredential?: (providerName: string, credentialId: string) => void | Promise<void>;
+  onRefreshProviderAccount?: (providerName: string, credentialId?: string) => void | Promise<void>;
   onToggleProviderCredential?: (providerName: string, credentialId: string) => void | Promise<void>;
   providerAccounts: ProviderAccountSnapshot[];
   providerAccountRefreshing?: boolean;
   providers?: GatewayProviderConfig[];
   refreshProviderAccounts?: () => void | Promise<void>;
+  refreshingAccountKey?: string;
   usageRange: UsageStatsRange;
   usageStats: UsageStatsSnapshot;
   widget: OverviewWidgetConfig;
@@ -789,12 +795,13 @@ function OverviewWidgetDragOverlay({
   return (
     <div className={cn("pointer-events-none overflow-hidden opacity-95 shadow-2xl", overviewWidgetOverlaySizeClass(widget.size))}>
       <OverviewWidgetRenderer
-        onRefreshProviderCredential={onRefreshProviderCredential}
+        onRefreshProviderAccount={onRefreshProviderAccount}
         onToggleProviderCredential={onToggleProviderCredential}
         providerAccounts={providerAccounts}
         providerAccountRefreshing={providerAccountRefreshing}
         providers={providers}
         refreshProviderAccounts={refreshProviderAccounts}
+        refreshingAccountKey={refreshingAccountKey}
         usageRange={usageRange}
         usageStats={usageStats}
         widget={widget}
@@ -1034,22 +1041,24 @@ function overviewWidgetResizeCursor(axis: OverviewWidgetResizeAxis): string {
 }
 
 function OverviewWidgetRenderer({
-  onRefreshProviderCredential,
+  onRefreshProviderAccount,
   onToggleProviderCredential,
   providerAccounts,
   providerAccountRefreshing = false,
   providers,
   refreshProviderAccounts,
+  refreshingAccountKey,
   usageRange,
   usageStats,
   widget
 }: {
-  onRefreshProviderCredential?: (providerName: string, credentialId: string) => void | Promise<void>;
+  onRefreshProviderAccount?: (providerName: string, credentialId?: string) => void | Promise<void>;
   onToggleProviderCredential?: (providerName: string, credentialId: string) => void | Promise<void>;
   providerAccounts: ProviderAccountSnapshot[];
   providerAccountRefreshing?: boolean;
   providers?: GatewayProviderConfig[];
   refreshProviderAccounts?: () => void | Promise<void>;
+  refreshingAccountKey?: string;
   usageRange: UsageStatsRange;
   usageStats: UsageStatsSnapshot;
   widget: OverviewWidgetConfig;
@@ -1059,7 +1068,7 @@ function OverviewWidgetRenderer({
   if (widget.type === "system-status") {
     content = <SystemStatusBar usageRange={usageRange} usageStats={usageStats} variant={widget.variant === "compact" ? "compact" : "timeline"} />;
   } else if (widget.type === "account-balance") {
-    content = <ProviderAccountsOverview accountProvider={widget.accountProvider} accounts={providerAccounts} dimensions={dimensions} onRefreshProviderCredential={onRefreshProviderCredential} onToggleProviderCredential={onToggleProviderCredential} providers={providers} refreshing={providerAccountRefreshing} variant={overviewAccountVariant(widget.variant)} onRefresh={refreshProviderAccounts} />;
+    content = <ProviderAccountsOverview accountProvider={widget.accountProvider} accounts={providerAccounts} dimensions={dimensions} onRefreshProviderAccount={onRefreshProviderAccount} onToggleProviderCredential={onToggleProviderCredential} providers={providers} refreshing={providerAccountRefreshing} refreshingAccountKey={refreshingAccountKey} variant={overviewAccountVariant(widget.variant)} onRefresh={refreshProviderAccounts} />;
   } else if (widget.type === "metric") {
     content = <OverviewMetricWidget metric={widget.metric ?? "requests"} totals={usageStats.totals} variant={overviewMetricVariant(widget.variant)} />;
   } else if (widget.type === "usage-trend") {
@@ -2321,27 +2330,32 @@ function ProviderAccountsOverview({
   accounts,
   dimensions,
   onRefresh,
-  onRefreshProviderCredential,
+  onRefreshProviderAccount,
   onToggleProviderCredential,
   providers,
   refreshing = false,
+  refreshingAccountKey,
   variant = "cards"
 }: {
   accountProvider?: string;
   accounts: ProviderAccountSnapshot[];
   dimensions: OverviewWidgetDimensions;
   onRefresh?: () => void | Promise<void>;
-  onRefreshProviderCredential?: (providerName: string, credentialId: string) => void | Promise<void>;
+  onRefreshProviderAccount?: (providerName: string, credentialId?: string) => void | Promise<void>;
   onToggleProviderCredential?: (providerName: string, credentialId: string) => void | Promise<void>;
   providers?: GatewayProviderConfig[];
   refreshing?: boolean;
+  refreshingAccountKey?: string;
   variant?: OverviewAccountVariant;
 }) {
-  // 卡片级刷新：凭据池 key 只刷新自身，非池卡片退回全局刷新
+  // 卡片级刷新：任意账户都精确刷新自身（provider + 可选 credentialId），不触发其他卡片
   const refreshFor = (account: ProviderAccountSnapshot) =>
-    account.credentialId && onRefreshProviderCredential
-      ? () => void onRefreshProviderCredential(account.provider, account.credentialId!)
+    onRefreshProviderAccount
+      ? () => void onRefreshProviderAccount(account.provider, account.credentialId)
       : onRefresh;
+  // 单卡转圈：全局刷新时所有卡片转；单账户刷新时只有对应卡片转
+  const refreshingFor = (account: ProviderAccountSnapshot) =>
+    refreshing || refreshingAccountKey === providerAccountSnapshotKey(account);
   const t = useAppText();
   const selectedAccountProvider = accountProvider?.trim();
   const sortedAccounts = [...accounts].sort(compareProviderAccountSnapshots);
@@ -2385,7 +2399,7 @@ function ProviderAccountsOverview({
         {visibleAccounts.length === 0 ? (
           <OverviewEmptyState className="h-full py-4" compact label={t("No account balance connectors configured")} />
         ) : isSingleAccount ? (
-          <ProviderAccountSinglePanel account={visibleAccounts[0]} dimensions={dimensions} refreshing={refreshing} variant={variant} onRefresh={onRefresh} />
+          <ProviderAccountSinglePanel account={visibleAccounts[0]} dimensions={dimensions} refreshing={refreshingFor(visibleAccounts[0])} variant={variant} onRefresh={refreshFor(visibleAccounts[0])} />
         ) : variant === "compact" ? (
           <div className={cn("grid h-full min-h-0 grid-cols-1 overflow-y-auto pr-1", providerAccountGapClass(dimensions), providerAccountGridClass(dimensions, visibleAccounts.length))}>
             {visibleAccounts.map((account) => {
@@ -2398,7 +2412,7 @@ function ProviderAccountsOverview({
                     {providerAccountShowRefreshTime(dimensions) ? <div className="truncate text-[11px] text-muted-foreground">{formatProviderAccountRefreshTime(account, t)}</div> : null}
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-1 text-right">
-                    {providerAccountShowRefresh(dimensions) ? <ProviderAccountRefreshButton account={account} refreshing={refreshing} onRefresh={onRefresh} /> : null}
+                    {providerAccountShowRefresh(dimensions) ? <ProviderAccountRefreshButton account={account} refreshing={refreshingFor(account)} onRefresh={refreshFor(account)} /> : null}
                     {meter ? <div className="font-mono text-[12px] font-semibold tabular-nums">{isOpenCodeGoUsageMeter(meter) ? formatOpenCodeGoUsageValue(meter) : formatProviderAccountMeterValue(meter)}</div> : null}
                   </div>
                 </div>
@@ -2420,7 +2434,7 @@ function ProviderAccountsOverview({
                     </div>
                     <div className="flex shrink-0 items-center gap-2 font-mono text-[12px] font-semibold tabular-nums">
                       {meter ? <span>{isOpenCodeGoUsageMeter(meter) ? formatOpenCodeGoUsageValue(meter) : formatProviderAccountMeterValue(meter)}</span> : null}
-                      {providerAccountShowRefresh(dimensions) ? <ProviderAccountRefreshButton account={account} refreshing={refreshing} onRefresh={onRefresh} /> : null}
+                      {providerAccountShowRefresh(dimensions) ? <ProviderAccountRefreshButton account={account} refreshing={refreshingFor(account)} onRefresh={refreshFor(account)} /> : null}
                     </div>
                   </div>
                   {progress !== undefined ? (
@@ -2443,7 +2457,7 @@ function ProviderAccountsOverview({
           >
             {visibleAccounts.map((account) => {
               const toggleState = providerCredentialToggleState(providers ?? [], account, onToggleProviderCredential);
-              return <ProviderAccountSummaryCard account={account} credentialEnabled={toggleState.enabled} dimensions={dimensions} key={providerAccountSnapshotKey(account)} onRefresh={refreshFor(account)} onToggleCredential={toggleState.toggle} refreshing={refreshing} variant={variant} />;
+              return <ProviderAccountSummaryCard account={account} credentialEnabled={toggleState.enabled} dimensions={dimensions} key={providerAccountSnapshotKey(account)} onRefresh={refreshFor(account)} onToggleCredential={toggleState.toggle} refreshing={refreshingFor(account)} variant={variant} />;
             })}
           </div>
         )}
